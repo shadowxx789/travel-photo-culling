@@ -19,7 +19,7 @@ except ImportError:
 from common import (CONFIG, DSU, contact_sheet, ensure_scan, gray_stats, group_median,
                     hamming, is_proxy, report_dir, require_bins, save_report)
 
-HDR_TRANSFERS = ("arrib-std-b67", "smpte2084")
+HDR_TRANSFERS = ("arib-std-b67", "smpte2084")
 
 
 # ---------- 基础工具 ----------
@@ -150,17 +150,18 @@ def pick_src(root, it):
 
 
 def extract_frames(src, dur, w, tmpdir, vid):
+    """返回 [(PIL 图, 抽帧秒数)]，临时帧用 PNG 无损，避免 JPEG 伪影干扰 Laplacian。"""
     frames = []
     for i in range(6):
         t = dur * (i + 0.5) / 6.0
-        out = Path(tmpdir) / ("%s_%d.jpg" % (vid, i))
+        out = Path(tmpdir) / ("%s_%d.png" % (vid, i))
         cmd = ["ffmpeg", "-v", "error", "-ss", "%.2f" % t, "-i", str(src),
                "-frames:v", "1", "-vf", "scale=%d:-2" % w, "-y", str(out)]
         subprocess.run(cmd, capture_output=True)
         if not out.exists() or out.stat().st_size == 0:
             continue
         try:
-            frames.append(Image.open(out).convert("RGB"))
+            frames.append((Image.open(out).convert("RGB"), t))
         except Exception:
             continue
     return frames
@@ -214,10 +215,11 @@ def main():
             frames = extract_frames(src, rec["duration"], w, tmpdir, rec["id"])
             if not frames:
                 rec["flags"] = ["ERR"]
-                rec["error"] = "无法读取时长/文件可能损坏"
+                rec["error"] = "抽帧失败"
                 continue
-            rec["_imgs"] = frames
-            stats = [gray_stats(f) for f in frames]
+            rec["_imgs"] = [f for f, _t in frames]
+            rec["_ts"] = [round(t, 1) for _f, t in frames]
+            stats = [gray_stats(f) for f in rec["_imgs"]]
             rec["brightness"] = [s["brightness"] for s in stats]
             rec["clip_high"] = [s["clip_high"] for s in stats]
             rec["clip_low"] = [s["clip_low"] for s in stats]
@@ -225,7 +227,7 @@ def main():
             sharps.sort()
             n = len(sharps)
             rec["median_sharp"] = round((sharps[n // 2] if n % 2 else (sharps[n // 2 - 1] + sharps[n // 2]) / 2), 1)
-            rec["phashes"] = [str(imagehash.phash(frames[i])) for i in (1, 3, 4) if i < len(frames)]
+            rec["phashes"] = [str(imagehash.phash(rec["_imgs"][i])) for i in (1, 3, 4) if i < len(rec["_imgs"])]
             rec["shake"] = shake_score(src, rec["duration"])
             rec["mean_volume_db"] = mean_volume_db(root / it["primary"]) if rec["has_audio"] else None
             rec["color_mode"] = tail_color_mode(root / it["primary"])
@@ -311,13 +313,14 @@ def main():
         suffix = "_LOG" if r["color_mode"] == "ilog" else ("_HDR" if r["hdr"] else "")
         name = "%s_%s%s.jpg" % (r["scene"], r["id"], suffix)
         out = sdir / name
-        labels = ["%s %.1fs" % (r["id"], r["duration"])] * len(r["_imgs"])
+        labels = ["%s t=%.1fs" % (r["id"], t) for t in r["_ts"]]
         contact_sheet(r["_imgs"], labels, str(out), cols=3, cell=480)
         r["sheet"] = "99_报告/sheets/video/" + name
         sheet_n += 1
 
     for r in recs:
         r.pop("_imgs", None)
+        r.pop("_ts", None)
         r.pop("_img", None)
         r.pop("_src", None)
 

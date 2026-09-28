@@ -39,7 +39,7 @@ CONFIG = {
     "zoom_wide_max": 40,
     "zoom_tele_max": 150,
     "analysis_px": 1280,
-    "shake_hint": 3.0,         # 需用实拍素材校准
+    "shake_hint": 1.0,         # 暂定值；待真实抖动样本校准
 }
 
 
