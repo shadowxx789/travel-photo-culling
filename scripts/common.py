@@ -57,7 +57,7 @@ def require_heif():
     try:
         from pillow_heif import register_heif_opener
     except ImportError:
-        sys.exit("缺少 pillow-heif：/Users/ew/.hermes/skills/media/travel-photo-culling/.venv/bin/pip install pillow-heif")
+        sys.exit("缺少 pillow-heif：<SKILL_DIR>/.venv/bin/pip install pillow-heif")
     register_heif_opener()
 
 
@@ -133,7 +133,7 @@ class DSU:
 
 
 def group_median(items, key_funcs, metric, min_n):
-    """按从细到粗的分组取中位数。返回 {primary: (median, level)}，level=len(key_funcs) 表示全局。"""
+    """按从细到粗的分组取中位数。返回 {primary: (median, level, n)}，level=len(key_funcs) 表示全局。"""
     import numpy as np
     vals = [it[metric] for it in items if it.get(metric) is not None]
     glob = float(np.median(vals)) if vals else None
@@ -149,10 +149,10 @@ def group_median(items, key_funcs, metric, min_n):
         for lvl, (kf, t) in enumerate(zip(key_funcs, tables)):
             v = t.get(kf(it), [])
             if len(v) >= min_n:
-                out[it["primary"]] = (float(np.median(v)), lvl)
+                out[it["primary"]] = (float(np.median(v)), lvl, len(v))
                 break
         else:
-            out[it["primary"]] = (glob, len(key_funcs))
+            out[it["primary"]] = (glob, len(key_funcs), len(vals))
     return out
 
 

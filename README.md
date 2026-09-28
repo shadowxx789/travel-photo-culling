@@ -5,7 +5,7 @@
 ## 初始化
 
 ```bash
-cd /Users/ew/.hermes/skills/media/travel-photo-culling && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd <SKILL_DIR> && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 系统依赖：`exiftool`、`ffmpeg`（macOS: `brew install exiftool ffmpeg`）。
@@ -15,5 +15,5 @@ cd /Users/ew/.hermes/skills/media/travel-photo-culling && python3 -m venv .venv 
 一律用全路径：
 
 ```bash
-/Users/ew/.hermes/skills/media/travel-photo-culling/.venv/bin/python /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/scan.py "<目标目录>"
+<SKILL_DIR>/.venv/bin/python <SKILL_DIR>/scripts/scan.py "<目标目录>"
 ```

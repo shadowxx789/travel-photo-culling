@@ -160,6 +160,7 @@ def main():
             "r2_level": None,
             "r2_median": None,
             "r2_ratio": None,
+            "r2_n": None,
             "load_fallback": False,
             "dup_group": None,
             "dup_size": 1,
@@ -189,10 +190,11 @@ def main():
     # R2：sharp_p90 低于所用层级中位数 x blur_ratio
     med = group_median(ok, R2_KEYS, "sharp_p90", CONFIG["min_group"])
     for r in ok:
-        m, lvl = med.get(r["primary"], (None, 4))
+        m, lvl, n = med.get(r["primary"], (None, 4, 0))
         r["r2_level"] = lvl
         r["r2_median"] = m
         r["r2_ratio"] = round((r["sharp_p90"] or 0) / m, 2) if m else None
+        r["r2_n"] = n
         if r["screenshot"]:
             continue
         if m is not None and (r["sharp_p90"] or 0) < m * CONFIG["blur_ratio"]:
