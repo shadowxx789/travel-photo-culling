@@ -22,7 +22,7 @@ EXIF_TAGS = [
     "-UserComment", "-ContentIdentifier", "-ProjectionType",
     "-DirectoryItemLength", "-MotionPhoto",
 ]
-SKIP_I = ["-i", "00_待删除", "-i", "01_待复核", "-i", "02_优秀", "-i", "03_普通", "-i", "99_报告"]
+SKIP_I = [x for d in sorted(SKIP_DIRS) for x in ("-i", d)]
 HEIC_EXTS = {".heic", ".heif"}
 JPG_EXTS = {".jpg", ".jpeg"}
 
@@ -136,7 +136,7 @@ def zoom_bucket(f35, ratio, device):
 
 def haversine(a, b):
     lat1, lon1, lat2, lon2 = map(math.radians, (a[0], a[1], b[0], b[1]))
-    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lon2) * math.sin((lon2 - lon1) / 2) ** 2
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
     return 12742000 * math.asin(math.sqrt(h))
 
 
@@ -272,8 +272,7 @@ def is_live_embedded(ex):
 
 
 def is_proxy_path(path_s):
-    name = Path(path_s).name
-    return Path(path_s).suffix.lower() in PROXY_EXTS or name.upper().startswith("LRV_")
+    return is_proxy(path_s)
 
 
 def is_raw_path(path_s):

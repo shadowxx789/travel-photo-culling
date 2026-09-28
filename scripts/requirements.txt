@@ -1,5 +1,0 @@
-pillow
-imagehash
-opencv-python
-numpy
-pillow-heif

@@ -8,7 +8,7 @@ from pathlib import Path
 
 REPORT_DIR = "99_报告"
 TIER_DIRS = {"00": "00_待删除", "01": "01_待复核", "02": "02_优秀", "03": "03_普通"}
-SKIP_DIRS = set(TIER_DIRS.values()) | {REPORT_DIR}
+SKIP_DIRS = set(TIER_DIRS.values()) | {REPORT_DIR, "_video_analysis"}
 
 IMG_EXTS = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 RAW_EXTS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2"}
@@ -45,6 +45,11 @@ CONFIG = {
 
 def nfc(s):
     return unicodedata.normalize("NFC", s)
+
+
+def is_proxy(path_str):
+    p = Path(path_str)
+    return p.suffix.lower() in PROXY_EXTS or p.name.upper().startswith("LRV_")
 
 
 def require_bins(*names):
