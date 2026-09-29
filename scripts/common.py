@@ -17,7 +17,7 @@ PROXY_EXTS = {".lrv"}
 SIDECAR_EXTS = {".xmp", ".aae", ".thm"}
 ALL_EXTS = IMG_EXTS | RAW_EXTS | VIDEO_EXTS | PROXY_EXTS | SIDECAR_EXTS
 
-DELETE_REASONS = {"模糊", "过曝", "欠曝", "歪斜", "闭眼", "遮挡", "误拍", "污损", "过短", "抖动"}
+DELETE_REASONS = {"模糊", "过曝", "欠曝", "歪斜", "闭眼", "遮挡", "误拍", "污损", "过短", "抖动", "重复"}
 
 CONFIG = {
     "local_tz": None,          # None=本机时区；也可写 "+08:00"
