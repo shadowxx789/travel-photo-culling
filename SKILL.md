@@ -61,6 +61,8 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 **Phase 5 预览**：运行 --list，按第 9 节的格式向用户汇报，然后等用户确认或修改。用户要求修改时，先改 plan，再重新运行 --list。
 
 **Phase 6 执行**：用户明确说"执行"后，再运行 --apply，并汇报结果。用户要撤销就运行 --undo。最后可以运行 --cleanup：先不带 --yes 列出清理项，用户同意后再加 --yes 执行。
+- 执行后如需调整分档：先 --undo，修改 plan.json，再 --list，确认后再 --apply。不要在 Finder 中手动拖动素材。
+- 本 skill 永不删除文件。00_待删除 由用户自行检查后手动清空；清空后，这些文件无法再用 --undo 恢复。
 
 ## 7. 分档标准
 **进入 00 要同时满足三条**：视觉已确认、不在误杀清单里、不是唯一记录。

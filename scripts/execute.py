@@ -280,6 +280,8 @@ def cmd_apply(root, scan):
                 continue
             if not src.exists():
                 continue  # 源和目标都没有：跳过
+        if dst.exists():
+            die("目标路径已存在，拒绝覆盖：%s" % dst_rel)
         log_append(root, {"batch": batch, "seq": seq, "src": src_rel, "dst": dst_rel, "state": "pending"})
         dst.parent.mkdir(parents=True, exist_ok=True)
         os.rename(src, dst)
