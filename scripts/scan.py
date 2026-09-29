@@ -16,6 +16,7 @@ DT_FMTS = ("%Y:%m:%d %H:%M:%S.%f%z", "%Y:%m:%d %H:%M:%S%z",
 EXIF_TAGS = [
     "-SubSecDateTimeOriginal", "-DateTimeOriginal", "-OffsetTimeOriginal",
     "-CreationDate", "-CreateDate", "-Make", "-Model",
+    "-QuickTime:CreateDate", "-QuickTime:ModifyDate",
     "-ImageWidth", "-ImageHeight",
     "-FocalLengthIn35mmFormat#", "-DigitalZoomRatio#", "-Duration#",
     "-GPSLatitude#", "-GPSLongitude#",
@@ -193,6 +194,22 @@ def duration_of(ex):
     return as_float(ex.get("Duration"))
 
 
+def slowmo_of(ex, duration):
+    """QuickTime 时间括号 = ModifyDate - CreateDate。返回 (capture_s, slowmo_factor)。"""
+    if duration is None or duration <= 0:
+        return None, None
+    c = parse_dt(ex.get("CreateDate"))
+    m = parse_dt(ex.get("ModifyDate"))
+    if c is None or m is None:
+        return round(duration, 1), None
+    bracket = (m - c).total_seconds()
+    if bracket <= 0:
+        return round(duration, 1), None
+    if duration / bracket >= 1.8:
+        return round(bracket, 1), round(duration / bracket)
+    return round(duration, 1), None
+
+
 def wh_of(ex):
     w = ex.get("ImageWidth")
     h = ex.get("ImageHeight")
@@ -315,6 +332,8 @@ def empty_item():
         "time_end": None,
         "time_source": None,
         "duration": None,
+        "capture_s": None,
+        "slowmo_factor": None,
         "width": None,
         "height": None,
         "gps": None,
@@ -385,6 +404,7 @@ def make_video_item(root, primary, companions, ex, tz, warnings):
     it = empty_item()
     prefix, seq = luna_meta(primary)
     dur = duration_of(ex)
+    cap, slow = slowmo_of(ex, dur)
     it["primary"] = rel(root, primary)
     it["companions"] = [rel(root, c) for c in companions]
     it["kind"] = "video"
@@ -393,7 +413,9 @@ def make_video_item(root, primary, companions, ex, tz, warnings):
     t, src = item_time(primary, ex, True, tz, warnings)
     it["time"] = t
     it["duration"] = dur
-    it["time_end"] = (t + dur) if (t is not None and dur is not None) else None
+    it["capture_s"] = cap
+    it["slowmo_factor"] = slow
+    it["time_end"] = (t + cap) if (t is not None and cap is not None) else None
     it["time_source"] = src
     fill_media_fields(it, primary, ex)
     return it
@@ -505,9 +527,12 @@ def print_stats(items, meta, tz):
 
     print("照片 %d（实况 %d / RAW 配对 %d / 仅 RAW %d / 截图 %d / 全景 %d）" % (
         len(photos), live_n, raw_paired, raw_only, shot_n, pano_n))
-    print("视频 %d（有 LRV %d / 缺 LRV %d）" % (len(videos), with_lrv, len(miss_lrv)))
+    slow_n = sum(1 for it in videos if it.get("slowmo_factor"))
+    print("视频 %d（有 LRV %d / 缺 LRV %d / 慢动作 %d）" % (len(videos), with_lrv, len(miss_lrv), slow_n))
     if miss_lrv:
-        print("  缺 LRV: " + ", ".join(Path(it["primary"]).name for it in miss_lrv))
+        print("  缺 LRV: " + ", ".join(
+            Path(it["primary"]).name + ("（慢动作，可能本来不生成 LRV）" if it.get("slowmo_factor") else "")
+            for it in miss_lrv))
     print("孤儿 LRV %d%s" % (
         len(orphans),
         ("（%s）" % ", ".join(Path(x).name for x in orphans)) if orphans else "",

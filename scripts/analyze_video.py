@@ -133,6 +133,7 @@ def empty_rec(it):
         "codec": None, "pix_fmt": None, "color_transfer": None, "color_primaries": None,
         "color_mode": None, "hdr": None, "has_audio": None, "mean_volume_db": None,
         "zoom_bucket": it.get("zoom_bucket"),
+        "capture_s": it.get("capture_s"), "slowmo_factor": it.get("slowmo_factor"),
         "median_sharp": None, "brightness": [], "clip_high": [], "clip_low": [],
         "phashes": [], "shake": None, "v3_median": None, "v3_level": None,
         "v3_n": None, "v3_ratio": None, "flags": [], "dup_group": None,
@@ -233,7 +234,7 @@ def main():
             rec["color_mode"] = tail_color_mode(root / it["primary"])
             rec["hdr"] = rec["color_transfer"] in HDR_TRANSFERS
 
-    # 4) V3 分组中位数（color_mode 必须是分组维度）
+    # 4) V3 分组中位数（color_mode 必须是分组维度；慢动作不参与中位数计算）
     ok = [r for r in recs if r["error"] is None]
     zr = sum(1 for r in ok if r["zoom_bucket"])
     use_zoom = bool(ok) and zr / len(ok) >= 0.8
@@ -251,7 +252,13 @@ def main():
             lambda r: (r["color_mode"],),
         ]
         v3_keys_desc = "(scene,color_mode) > (color_mode)"
-    med = group_median(ok, V3_KEYS, "median_sharp", CONFIG["min_group"])
+    med_in = []
+    for r in ok:
+        c = dict(r)
+        if r["slowmo_factor"] is not None:
+            c["median_sharp"] = None  # 慢动作不参与中位数计算，但仍取所在层级的中位数
+        med_in.append(c)
+    med = group_median(med_in, V3_KEYS, "median_sharp", CONFIG["min_group"])
     for r in ok:
         m, lvl, n = med.get(r["primary"], (None, 0, 0))
         r["v3_median"] = round(m, 1) if m is not None else None
@@ -274,7 +281,8 @@ def main():
                 r["flags"].append("V4-low")
         if r["v3_median"] is not None and r["median_sharp"] < r["v3_median"] * CONFIG["blur_ratio"]:
             r["flags"].append("V3")
-        if r["shake"] is not None and r["shake"] > CONFIG["shake_hint"]:
+        # 慢放后帧间位移被压缩，shake 不可比 → 不打 V2-hint
+        if r["slowmo_factor"] is None and r["shake"] is not None and r["shake"] > CONFIG["shake_hint"]:
             r["flags"].append("V2-hint")
 
     # 6) 重复聚簇
@@ -311,6 +319,8 @@ def main():
         if not r["_imgs"]:
             continue
         suffix = "_LOG" if r["color_mode"] == "ilog" else ("_HDR" if r["hdr"] else "")
+        if r["slowmo_factor"] is not None:
+            suffix += "_SLOW"
         name = "%s_%s%s.jpg" % (r["scene"], r["id"], suffix)
         out = sdir / name
         labels = ["%s t=%.1fs" % (r["id"], t) for t in r["_ts"]]
@@ -334,7 +344,10 @@ def main():
     for r in recs:
         if r["shake"] is None:
             continue
-        key = "%s x %s" % (r["color_mode"], r["src_fps"])
+        if r["slowmo_factor"] is not None:
+            key = "slowmo"
+        else:
+            key = "%s x %s" % (r["color_mode"], r["src_fps"])
         groups.setdefault(key, []).append(r["shake"])
     for key in sorted(groups):
         v = sorted(groups[key])
