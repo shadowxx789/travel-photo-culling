@@ -266,17 +266,31 @@ def cmd_apply(root, scan):
             die("检测到跨设备移动（%s），拒绝执行" % src_rel)
     batch = "B%d" % int(time.time() * 1000)
     crash_after = int(os.environ.get("CULL_CRASH_AFTER") or 0)
+    crash_mode = os.environ.get("CULL_CRASH_MODE") or ""
     n = 0
+    auto_n = 0
     for seq, (src_rel, dst_rel) in enumerate(moves, 1):
-        log_append(root, {"batch": batch, "seq": seq, "src": src_rel, "dst": dst_rel, "state": "pending"})
+        src = Path(root) / src_rel
         dst = Path(root) / dst_rel
+        if src.name.startswith("._"):
+            if not src.exists() and dst.exists():
+                # 文件系统在主文件 rename 时已自动带走 ._，记 auto
+                log_append(root, {"batch": batch, "seq": seq, "src": src_rel, "dst": dst_rel, "state": "auto"})
+                auto_n += 1
+                continue
+            if not src.exists():
+                continue  # 源和目标都没有：跳过
+        log_append(root, {"batch": batch, "seq": seq, "src": src_rel, "dst": dst_rel, "state": "pending"})
         dst.parent.mkdir(parents=True, exist_ok=True)
-        os.rename(Path(root) / src_rel, dst)
-        log_append(root, {"batch": batch, "seq": seq, "state": "done"})
+        os.rename(src, dst)
         n += 1
+        if crash_after and n == crash_after and crash_mode == "before_done":
+            os._exit(1)  # rename 完成、done 未写
+        log_append(root, {"batch": batch, "seq": seq, "state": "done"})
         if crash_after and n == crash_after:
             os._exit(1)
-    print("已移动 %d 个文件（batch %s）" % (n, batch))
+    print("已移动 %d 个文件（batch %s%s）" % (
+        n, batch, "，系统自动处理 ._ %d 个" % auto_n if auto_n else ""))
     return 0
 
 
@@ -287,7 +301,7 @@ def is_junk_dir_entry(name):
 
 
 def clean_empty_dirs(root):
-    """删空层级目录（只含 .DS_Store / ._ 的也算空）。"""
+    """删空层级目录（只含 .DS_Store / ._ 的也算空），连同目录自身的 ._ 影子。"""
     removed = []
     for tier in sorted(TIER_DIRS.values()):
         base = Path(root) / tier
@@ -308,6 +322,11 @@ def clean_empty_dirs(root):
         if base.exists() and not any(base.iterdir()):
             base.rmdir()
             removed.append(str(base))
+    # exFAT 会给目录生成 ._ 影子文件：目录删掉后影子一并清理
+    for d in removed:
+        shadow = Path(d).parent / ("._" + Path(d).name)
+        if shadow.exists():
+            shadow.unlink()
     return removed
 
 
@@ -318,12 +337,23 @@ def cmd_undo(root):
         print("没有待撤销的 batch")
         return 0
     moved_back = 0
+    auto_back = 0
     conflicts = []
     for batch in reversed(open_b):
         rows = [r for r in records if r.get("batch") == batch]
-        for r in sorted((x for x in rows if "src" in x), key=lambda x: -x["seq"]):
+        # 先还原主文件（fskit 会随主文件自动带走 ._），再处理 ._ 记录
+        mains = [x for x in rows if "src" in x and not Path(x["src"]).name.startswith("._")]
+        ads = [x for x in rows if "src" in x and Path(x["src"]).name.startswith("._")]
+        for r in sorted(mains, key=lambda x: -x["seq"]) + sorted(ads, key=lambda x: -x["seq"]):
             src = Path(root) / r["src"]
             dst = Path(root) / r["dst"]
+            if r.get("state") == "auto":
+                # 系统自动处理过的 ._：还原规则同 apply——已还原/都没有则跳过，绝不报冲突
+                if dst.exists() and not src.exists():
+                    src.parent.mkdir(parents=True, exist_ok=True)
+                    os.rename(dst, src)
+                    auto_back += 1
+                continue
             done = any(x.get("batch") == batch and x.get("seq") == r["seq"]
                        and x.get("state") == "done" for x in rows)
             if done:
@@ -347,7 +377,7 @@ def cmd_undo(root):
         log_append(root, {"batch": batch, "state": "undone"})
     for d in clean_empty_dirs(root):
         print("已删除空目录 %s" % d)
-    print("已还原 %d 个文件" % moved_back)
+    print("已还原 %d 个文件%s" % (moved_back, "（._ 自动还原 %d 个）" % auto_back if auto_back else ""))
     if conflicts:
         print("冲突 %d 个（未覆盖任何文件）：" % len(conflicts))
         for c in conflicts:
