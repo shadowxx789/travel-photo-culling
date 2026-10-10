@@ -8,13 +8,13 @@ from pathlib import Path
 
 REPORT_DIR = "99_报告"
 TIER_DIRS = {"00": "00_待删除", "01": "01_待复核", "02": "02_优秀", "03": "03_普通"}
-SKIP_DIRS = set(TIER_DIRS.values()) | {REPORT_DIR, "_video_analysis"}
+SKIP_DIRS = set(TIER_DIRS.values()) | {REPORT_DIR, "_video_analysis", "NKSC_PARAM"}
 
-IMG_EXTS = {".heic", ".heif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+IMG_EXTS = {".heic", ".heif", ".hif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
 RAW_EXTS = {".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2"}
-VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mts", ".webm"}
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mts", ".webm", ".nev"}
 PROXY_EXTS = {".lrv"}
-SIDECAR_EXTS = {".xmp", ".aae", ".thm"}
+SIDECAR_EXTS = {".xmp", ".aae", ".thm", ".nksc"}
 ALL_EXTS = IMG_EXTS | RAW_EXTS | VIDEO_EXTS | PROXY_EXTS | SIDECAR_EXTS
 
 DELETE_REASONS = {"模糊", "过曝", "欠曝", "歪斜", "闭眼", "遮挡", "误拍", "污损", "过短", "抖动", "重复"}
@@ -40,7 +40,17 @@ CONFIG = {
     "zoom_tele_max": 150,
     "analysis_px": 1280,
     "shake_hint": 1.0,         # 暂定值；待真实抖动样本校准
+    "device_offsets": {},      # Model → 时钟偏移秒数，例如 {"NIKON Z5_2": -120}
+    "raw_preview_min_px": 1600,
 }
+
+
+def device_key(it):
+    """Luna 返回 'luna'，其余返回 Model 原文（去掉首尾空格）。"""
+    dev = (it.get("device") or "").strip()
+    if dev == "Insta360 Luna Ultra":
+        return "luna"
+    return dev
 
 
 def nfc(s):

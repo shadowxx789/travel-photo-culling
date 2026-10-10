@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 import math
 import re
 import statistics
@@ -22,10 +23,12 @@ EXIF_TAGS = [
     "-GPSLatitude#", "-GPSLongitude#",
     "-UserComment", "-ContentIdentifier", "-ProjectionType",
     "-DirectoryItemLength", "-MotionPhoto",
+    "-ShutterCount", "-LensModel", "-ColorTransfer", "-TransferCharacteristics",
 ]
 SKIP_I = [x for d in sorted(SKIP_DIRS) for x in ("-i", d)]
-HEIC_EXTS = {".heic", ".heif"}
+HEIC_EXTS = {".heic", ".heif", ".hif"}
 JPG_EXTS = {".jpg", ".jpeg"}
+HIF_EXTS = {".hif", ".heif", ".heic"}
 
 
 def get_tz():
@@ -106,9 +109,50 @@ def item_time(p, ex, is_video, tz, warnings):
         if et is not None and abs(ft - et) > 60:
             warnings.append((p.name, int(et - ft)))
         return ft, "filename"
-    if et is not None:
-        return et, etag
-    return p.stat().st_mtime, "mtime"
+    if LUNA_RE.match(p.stem):
+        if et is not None:
+            return et, etag
+        return p.stat().st_mtime, "mtime"
+    return non_luna_time(p, ex, is_video, tz)
+
+
+def combine_dto_offset(ex, tz):
+    dto = parse_dt(ex.get("DateTimeOriginal"))
+    if not dto:
+        return None
+    off = ex.get("OffsetTimeOriginal")
+    if isinstance(off, str) and off.strip() and not dto.tzinfo:
+        combined = parse_dt(ex.get("DateTimeOriginal").strip() + off.strip())
+        if combined:
+            return combined
+        dto = dto.replace(tzinfo=tz)
+        return dto
+    if dto.tzinfo:
+        return dto
+    return dto.replace(tzinfo=tz)
+
+
+def non_luna_time(p, ex, is_video, tz):
+    dt = parse_dt(ex.get("SubSecDateTimeOriginal"))
+    src = "SubSecDateTimeOriginal"
+    if dt is None:
+        dt = combine_dto_offset(ex, tz)
+        if dt is not None and ex.get("OffsetTimeOriginal"):
+            src = "DateTimeOriginal+OffsetTimeOriginal"
+        elif dt is not None:
+            src = "DateTimeOriginal"
+    if dt is None:
+        et, etag = exif_time(ex, is_video, tz)
+        if et is not None:
+            ts, src = et, etag
+        else:
+            ts, src = p.stat().st_mtime, "mtime"
+    else:
+        ts = (dt if dt.tzinfo else dt.replace(tzinfo=tz)).timestamp()
+    model = (ex.get("Model") or "").strip()
+    off = CONFIG.get("device_offsets") or {}
+    ts = ts + (off.get(model, 0) or 0)
+    return ts, src
 
 
 def first_len(v):
@@ -130,9 +174,14 @@ def zoom_bucket(f35, ratio, device):
         for name, mm in CONFIG["luna_lenses"].items():
             if abs(base - mm) <= mm * 0.1:
                 return name + ("_crop" if r > 1.05 else "")
-    if f35 <= CONFIG["zoom_wide_max"]:
+        if f35 <= CONFIG["zoom_wide_max"]:
+            return "wide"
+        return "tele" if f35 <= CONFIG["zoom_tele_max"] else "digital"
+    if f35 <= 40:
         return "wide"
-    return "tele" if f35 <= CONFIG["zoom_tele_max"] else "digital"
+    if f35 <= 105:
+        return "mid"
+    return "tele"
 
 
 def haversine(a, b):
@@ -241,6 +290,15 @@ def image_rank(p):
     return 2
 
 
+def image_rank_non_luna(p):
+    ext = p.suffix.lower()
+    if ext in JPG_EXTS:
+        return 0
+    if ext in HIF_EXTS:
+        return 1
+    return 2
+
+
 def luna_meta(p):
     m = LUNA_RE.match(p.stem)
     if m:
@@ -251,10 +309,11 @@ def luna_meta(p):
 def device_of(p, ex):
     if LUNA_RE.match(p.stem):
         return "Insta360 Luna Ultra"
-    make = (ex.get("Make") or "").strip()
     model = (ex.get("Model") or "").strip()
-    name = (make + " " + model).strip()
-    return name or None
+    if model:
+        return model
+    make = (ex.get("Make") or "").strip()
+    return make or None
 
 
 def is_screenshot(p, ex):
@@ -342,6 +401,10 @@ def empty_item():
         "zoom_bucket": None,
         "primary_len": None,
         "scene": None,
+        "lens": None,
+        "shutter_count": None,
+        "backup_copies": [],
+        "cross_dir": False,
     }
 
 
@@ -363,6 +426,14 @@ def fill_media_fields(it, p, ex):
     it["primary_len"] = first_len(ex.get("DirectoryItemLength"))
     it["screenshot"] = is_screenshot(p, ex)
     it["pano"] = is_pano(ex, w, h)
+    lens = ex.get("LensModel")
+    it["lens"] = lens.strip() if isinstance(lens, str) and lens.strip() else None
+    it["shutter_count"] = first_len(ex.get("ShutterCount"))
+    ct = ex.get("ColorTransfer") or ex.get("TransferCharacteristics")
+    if isinstance(ct, str) and ct.strip():
+        it["color_transfer"] = ct.strip()
+    else:
+        it["color_transfer"] = None
 
 
 def make_photo_item(root, primary, companions, ex, tz, warnings, live, live_embedded):
@@ -371,7 +442,7 @@ def make_photo_item(root, primary, companions, ex, tz, warnings, live, live_embe
     it["primary"] = rel(root, primary)
     it["companions"] = [rel(root, c) for c in companions]
     it["kind"] = "image"
-    it["subtype"] = prefix if prefix else "IMG"
+    it["subtype"] = prefix if prefix else "STILL"
     it["seq"] = seq
     it["live"] = bool(live or live_embedded)
     it["live_embedded"] = bool(live_embedded)
@@ -390,7 +461,7 @@ def make_raw_item(root, primary, companions, ex, tz, warnings):
     it["primary"] = rel(root, primary)
     it["companions"] = [rel(root, c) for c in companions]
     it["kind"] = "raw"
-    it["subtype"] = prefix if prefix else "IMG"
+    it["subtype"] = prefix if prefix else "STILL"
     it["seq"] = seq
     t, src = item_time(primary, ex, False, tz, warnings)
     it["time"] = t
@@ -421,12 +492,13 @@ def make_video_item(root, primary, companions, ex, tz, warnings):
     return it
 
 
-def items_from_group(root, files, index, tz, warnings, orphan_proxies, orphan_sidecars):
+def items_from_group(root, files, index, tz, warnings, orphan_proxies, orphan_sidecars, rank_fn=None):
     buckets = {"image": [], "raw": [], "video": [], "proxy": [], "sidecar": []}
     for p in files:
         buckets[classify(p)].append(p)
     out = []
-    images = sorted(buckets["image"], key=lambda p: (image_rank(p), p.name))
+    rank = rank_fn or image_rank
+    images = sorted(buckets["image"], key=lambda p: (rank(p), p.name))
     raws = sorted(buckets["raw"], key=lambda p: p.name)
     videos = sorted(buckets["video"], key=lambda p: p.name)
     proxies = sorted(buckets["proxy"], key=lambda p: p.name)
@@ -494,7 +566,231 @@ def items_from_group(root, files, index, tz, warnings, orphan_proxies, orphan_si
     return out
 
 
+def _parent_rel(root, p):
+    if p.parent.resolve() == Path(root).resolve():
+        return ""
+    return rel(root, p.parent)
+
+
+def _dto_key(ex):
+    s = ex.get("SubSecDateTimeOriginal")
+    if isinstance(s, str) and s.strip():
+        return s.strip()
+    dto = ex.get("DateTimeOriginal")
+    sub = ex.get("SubSecTimeOriginal")
+    if dto and sub is not None:
+        return "%s.%s" % (dto, sub)
+    return str(dto) if dto else ""
+
+
+def _file_md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _cross_key(ex, p):
+    model = (ex.get("Model") or "").strip()
+    shut = first_len(ex.get("ShutterCount"))
+    if model and shut is not None:
+        return ("s", model, shut)
+    return ("t", model, _dto_key(ex), p.stem.lower())
+
+
+def _pick_primary(images, raws):
+    imgs = sorted(images, key=lambda p: (image_rank_non_luna(p), p.name))
+    if imgs:
+        return imgs[0], "image"
+    raws = sorted(raws, key=lambda p: p.name)
+    return raws[0], "raw"
+
+
+def _attach_backups(item, backups):
+    if not backups:
+        return
+    rels = [b for b in backups if b not in item["companions"] and b != item["primary"]]
+    item["backup_copies"] = list(item.get("backup_copies") or []) + rels
+    item["companions"] = list(item.get("companions") or []) + rels
+
+
+def _item_media_rels(it):
+    return [it["primary"]] + [c for c in (it.get("companions") or []) if Path(c).suffix.lower() not in SIDECAR_EXTS]
+
+
+def _merge_backup_copies(root, items, recs):
+    """相同 Model+ShutterCount(或时间+主干)+扩展名+大小+MD5 的第二份并入 keeper，不另立条目。"""
+    rel_to_rec = {r["rel"]: r for r in recs}
+
+    def sig(rel):
+        r = rel_to_rec.get(rel)
+        if not r:
+            return None
+        return (r["model"], r["shut"] if r["shut"] is not None else (r["dto"], r["stem"]), r["ext"], r["size"])
+
+    groups = defaultdict(list)
+    for idx, it in enumerate(items):
+        if it["kind"] not in ("image", "raw"):
+            continue
+        for relp in _item_media_rels(it):
+            s = sig(relp)
+            if s:
+                groups[s].append((idx, relp))
+
+    drop = set()
+    for s, refs in groups.items():
+        if len(refs) < 2:
+            continue
+        by_h = defaultdict(list)
+        for idx, relp in refs:
+            by_h[_file_md5(Path(root) / relp)].append((idx, relp))
+        for _h, same in by_h.items():
+            idxs = sorted(set(i for i, _r in same))
+            if len(idxs) < 2:
+                continue
+
+            def score(i):
+                it = items[i]
+                mixed = it["kind"] == "image" and any(is_raw_path(c) for c in it.get("companions") or [])
+                return (0 if mixed else 1, 0 if it["kind"] == "image" else 1, it["primary"])
+
+            keeper = min(idxs, key=score)
+            for i in idxs:
+                if i == keeper or i in drop:
+                    continue
+                extras = [relp for ii, relp in same if ii == i]
+                # 该条目里未作为副本的其他文件也并入（通常没有）
+                for relp in _item_media_rels(items[i]):
+                    if relp not in extras:
+                        extras.append(relp)
+                _attach_backups(items[keeper], extras)
+                drop.add(i)
+    for i in sorted(drop, reverse=True):
+        items.pop(i)
+
+
+def pair_non_luna(root, files, index, tz, warnings, orphan_proxies, orphan_sidecars):
+    """同一目录按主干配对；其余跨目录（Model+ShutterCount 或 时间+主干）；相同 MD5 为 backup_copy。"""
+    photos, videos, proxies, sidecars = [], [], [], []
+    for p in files:
+        k = classify(p)
+        if k in ("image", "raw"):
+            photos.append(p)
+        elif k == "video":
+            videos.append(p)
+        elif k == "proxy":
+            proxies.append(p)
+        else:
+            sidecars.append(p)
+
+    recs = []
+    for p in photos:
+        ex = ex_of(index, p)
+        recs.append({
+            "p": p,
+            "rel": rel(root, p),
+            "parent": _parent_rel(root, p),
+            "stem": p.stem.lower(),
+            "ext": p.suffix.lower(),
+            "kind": classify(p),
+            "ex": ex,
+            "model": (ex.get("Model") or "").strip(),
+            "shut": first_len(ex.get("ShutterCount")),
+            "dto": _dto_key(ex),
+            "size": p.stat().st_size,
+            "ck": _cross_key(ex, p),
+        })
+
+    # 先全部参与同目录/跨目录配对，备份副本事后并入（避免副本抢 primary）
+    by_dir_stem = defaultdict(list)
+    for r in recs:
+        by_dir_stem[(r["parent"], r["stem"])].append(r)
+
+    mixed, pending_img, pending_raw = [], [], []
+    for _k, fs in by_dir_stem.items():
+        imgs = [r for r in fs if r["kind"] == "image"]
+        raws = [r for r in fs if r["kind"] == "raw"]
+        if imgs and raws:
+            mixed.append(fs)
+        elif imgs:
+            pending_img.append(fs)
+        elif raws:
+            pending_raw.append(fs)
+
+    used_pending = set()
+    raw_index = defaultdict(list)
+    for i, fs in enumerate(pending_raw):
+        raw_index[fs[0]["ck"]].append(i)
+
+    cross_groups = []
+    for fs in pending_img:
+        ck = fs[0]["ck"]
+        found = None
+        for i in raw_index.get(ck, []):
+            if i not in used_pending:
+                found = i
+                break
+        if found is None:
+            continue
+        used_pending.add(found)
+        cross_groups.append(fs + pending_raw[found])
+
+    leftover_img = [fs for fs in pending_img if not any(fs[0] is g[0] for g in cross_groups)]
+    leftover_raw = [pending_raw[i] for i in range(len(pending_raw)) if i not in used_pending]
+
+    groups = mixed + cross_groups + leftover_img + leftover_raw
+    cross_ids = set()
+    for g in cross_groups:
+        for r in g:
+            cross_ids.add(id(r))
+
+    # sidecar 按目录+主干挂上
+    side_map = defaultdict(list)
+    for s in sidecars:
+        side_map[(_parent_rel(root, s), s.stem.lower())].append(s)
+
+    items = []
+    for fs in groups:
+        imgs = [r["p"] for r in fs if r["kind"] == "image"]
+        raws = [r["p"] for r in fs if r["kind"] == "raw"]
+        primary, kind = _pick_primary(imgs, raws)
+        companions = [p for p in imgs + raws if p != primary]
+        parent, stem = _parent_rel(root, primary), primary.stem.lower()
+        extra_sc = side_map.pop((parent, stem), [])
+        companions = companions + extra_sc
+        if kind == "image":
+            it = make_photo_item(root, primary, companions, ex_of(index, primary), tz, warnings, False, False)
+        else:
+            it = make_raw_item(root, primary, companions, ex_of(index, primary), tz, warnings)
+        it["cross_dir"] = any(id(r) in cross_ids for r in fs)
+        items.append(it)
+
+    _merge_backup_copies(root, items, recs)
+
+    for s_list in side_map.values():
+        for s in s_list:
+            orphan_sidecars.append(rel(root, s))
+
+    # 视频：按目录+主干，不与照片互配
+    v_groups = defaultdict(list)
+    for v in videos:
+        v_groups[(_parent_rel(root, v), v.stem.lower())].append(v)
+    p_groups = defaultdict(list)
+    for pr in proxies:
+        p_groups[(_parent_rel(root, pr), pr.stem.lower())].append(pr)
+    for key, vs in v_groups.items():
+        v_comp = list(p_groups.pop(key, []))
+        vs = sorted(vs, key=lambda p: p.name)
+        items.append(make_video_item(root, vs[0], vs[1:] + v_comp, ex_of(index, vs[0]), tz, warnings))
+    for prs in p_groups.values():
+        for pr in prs:
+            orphan_proxies.append(rel(root, pr))
+    return items
+
+
 def assign_ids(items):
+
     pc = 0
     vc = 0
     for it in items:
@@ -549,11 +845,25 @@ def print_stats(items, meta, tz):
         by_dev[it.get("device") or "(unknown)"].append(it)
     print("设备 %d 台" % len(by_dev))
     for dev, rows in sorted(by_dev.items()):
+        ph = [it for it in rows if it["kind"] in ("image", "raw")]
+        jpg_raw = sum(1 for it in ph if it["kind"] == "image" and any(is_raw_path(c) for c in it.get("companions") or []))
+        raw_o = sum(1 for it in ph if it["kind"] == "raw")
+        jpg_o = sum(1 for it in ph if it["kind"] == "image" and not any(is_raw_path(c) for c in it.get("companions") or []))
+        cross_n = sum(1 for it in ph if it.get("cross_dir"))
+        bak_n = sum(len(it.get("backup_copies") or []) for it in ph)
         ts = [it["time"] for it in rows if it.get("time") is not None]
-        if ts:
-            print("  %s: %s → %s (%d)" % (dev, fmt_ts(min(ts), tz), fmt_ts(max(ts), tz), len(rows)))
-        else:
-            print("  %s: (%d)" % (dev, len(rows)))
+        span = ("%s → %s" % (fmt_ts(min(ts), tz), fmt_ts(max(ts), tz))) if ts else "-"
+        print("  %s: 张数 %d，JPG+RAW %d，仅 RAW %d，仅 JPG %d，跨目录配对 %d，备份副本 %d，%s" % (
+            dev, len(ph), jpg_raw, raw_o, jpg_o, cross_n, bak_n, span))
+    dir_devs = defaultdict(set)
+    for it in photos:
+        parent = str(Path(it["primary"]).parent)
+        if parent == ".":
+            parent = ""
+        dir_devs[parent].add(it.get("device") or "(unknown)")
+    mixed_dirs = [d for d, ds in dir_devs.items() if len(ds) > 1]
+    if mixed_dirs:
+        print("提示: 同一目录出现多台设备，时间差可能来自相机时钟。请拍一张手机时钟来校对，或在 CONFIG device_offsets 里填写偏移。")
 
     srcs = Counter(it.get("time_source") for it in items)
     print("time_source: " + ", ".join("%s %d" % (k, n) for k, n in srcs.most_common()))
@@ -590,8 +900,10 @@ def main():
     tz = get_tz()
     index = run_exiftool(root)
     files = list(iter_files(root))
+    luna_files = [p for p in files if LUNA_RE.match(p.stem)]
+    other_files = [p for p in files if not LUNA_RE.match(p.stem)]
     groups = defaultdict(list)
-    for p in files:
+    for p in luna_files:
         groups[group_key(root, p)].append(p)
     group_lists = merge_groups(groups, index, root)
 
@@ -601,6 +913,8 @@ def main():
     items = []
     for g in group_lists:
         items.extend(items_from_group(root, g, index, tz, warnings, orphan_proxies, orphan_sidecars))
+    if other_files:
+        items.extend(pair_non_luna(root, other_files, index, tz, warnings, orphan_proxies, orphan_sidecars))
 
     assign_scenes(items)
     assign_ids(items)

@@ -16,7 +16,7 @@ try:
 except ImportError:
     sys.exit("请先安装: pip install imagehash")
 
-from common import (CONFIG, DSU, contact_sheet, ensure_scan, gray_stats, group_median,
+from common import (CONFIG, DSU, contact_sheet, device_key, ensure_scan, gray_stats, group_median,
                     hamming, is_proxy, report_dir, require_bins, save_report)
 
 HDR_TRANSFERS = ("arib-std-b67", "smpte2084")
@@ -63,6 +63,21 @@ def tail_color_mode(path, nbytes=4 * 1024 * 1024):
     except OSError:
         return None
     return "ilog" if b"I_Log" in tail else "standard"
+
+
+def nikon_color_mode(pr):
+    """尼康：nlog / hlg / standard；识别不了返回 None。"""
+    tr = (pr.get("color_transfer") or "") or ""
+    prim = (pr.get("color_primaries") or "") or ""
+    blob = (" ".join([tr, prim])).lower()
+    trl = tr.lower()
+    if trl in HDR_TRANSFERS or "hlg" in blob or "arib-std-b67" in blob:
+        return "hlg"
+    if "nlog" in blob or "n-log" in blob or "n_log" in blob:
+        return "nlog"
+    if trl in ("bt709", "bt.709", "iec61966-2-1", "smpte170m", "bt601", "bt.601"):
+        return "standard"
+    return None
 
 
 # ---------- ffprobe ----------
@@ -133,6 +148,7 @@ def empty_rec(it):
         "codec": None, "pix_fmt": None, "color_transfer": None, "color_primaries": None,
         "color_mode": None, "hdr": None, "has_audio": None, "mean_volume_db": None,
         "zoom_bucket": it.get("zoom_bucket"),
+        "device": it.get("device"),
         "capture_s": it.get("capture_s"), "slowmo_factor": it.get("slowmo_factor"),
         "median_sharp": None, "brightness": [], "clip_high": [], "clip_low": [],
         "phashes": [], "shake": None, "v3_median": None, "v3_level": None,
@@ -185,6 +201,11 @@ def main():
 
     # 1) 元数据 + 分析源选择
     for it, rec in zip(items, recs):
+        if Path(it["primary"]).suffix.lower() == ".nev":
+            rec["flags"] = ["ERR"]
+            rec["error"] = "格式不支持"
+            rec["_src"] = None
+            continue
         src, tag = pick_src(root, it)
         rec["analysis_src"] = tag
         rec["_src"] = src
@@ -208,9 +229,13 @@ def main():
     # 3) 逐段分析
     with tempfile.TemporaryDirectory() as tmpdir:
         for it, rec in zip(items, recs):
+            if rec.get("error"):
+                rec.pop("_src", None)
+                continue
             if rec["duration"] is None or rec["duration"] <= 0:
                 rec["flags"] = ["ERR"]
                 rec["error"] = "无法读取时长/文件可能损坏"
+                rec.pop("_src", None)
                 continue
             src = rec.pop("_src")
             frames = extract_frames(src, rec["duration"], w, tmpdir, rec["id"])
@@ -231,8 +256,11 @@ def main():
             rec["phashes"] = [str(imagehash.phash(rec["_imgs"][i])) for i in (1, 3, 4) if i < len(rec["_imgs"])]
             rec["shake"] = shake_score(src, rec["duration"])
             rec["mean_volume_db"] = mean_volume_db(root / it["primary"]) if rec["has_audio"] else None
-            rec["color_mode"] = tail_color_mode(root / it["primary"])
-            rec["hdr"] = rec["color_transfer"] in HDR_TRANSFERS
+            if rec.get("device") == "Insta360 Luna Ultra":
+                rec["color_mode"] = tail_color_mode(root / it["primary"])
+            else:
+                rec["color_mode"] = nikon_color_mode(rec)
+            rec["hdr"] = rec["color_transfer"] in HDR_TRANSFERS or rec["color_mode"] == "hlg"
 
     # 4) V3 分组中位数（color_mode 必须是分组维度；慢动作不参与中位数计算）
     ok = [r for r in recs if r["error"] is None]
@@ -240,18 +268,18 @@ def main():
     use_zoom = bool(ok) and zr / len(ok) >= 0.8
     if use_zoom:
         V3_KEYS = [
-            lambda r: (r["scene"], r["color_mode"], r["zoom_bucket"]),
-            lambda r: (r["scene"], r["color_mode"]),
-            lambda r: (r["color_mode"], r["zoom_bucket"]),
-            lambda r: (r["color_mode"],),
+            lambda r: (device_key(r), r["scene"], r["color_mode"], r["zoom_bucket"]),
+            lambda r: (device_key(r), r["scene"], r["color_mode"]),
+            lambda r: (device_key(r), r["color_mode"], r["zoom_bucket"]),
+            lambda r: (device_key(r), r["color_mode"]),
         ]
-        v3_keys_desc = "(scene,color_mode,zoom) > (scene,color_mode) > (color_mode,zoom) > (color_mode)"
+        v3_keys_desc = "(device,scene,color_mode,zoom) > (device,scene,color_mode) > (device,color_mode,zoom) > (device,color_mode)"
     else:
         V3_KEYS = [
-            lambda r: (r["scene"], r["color_mode"]),
-            lambda r: (r["color_mode"],),
+            lambda r: (device_key(r), r["scene"], r["color_mode"]),
+            lambda r: (device_key(r), r["color_mode"]),
         ]
-        v3_keys_desc = "(scene,color_mode) > (color_mode)"
+        v3_keys_desc = "(device,scene,color_mode) > (device,color_mode)"
     med_in = []
     for r in ok:
         c = dict(r)
@@ -270,7 +298,9 @@ def main():
     for r in ok:
         if r["duration"] < CONFIG["video_min_s"]:
             r["flags"].append("V1")
-        skip_light = r["color_mode"] == "ilog" or r["hdr"]
+        skip_light = r["color_mode"] == "ilog" or r["hdr"] or (
+            r.get("device") != "Insta360 Luna Ultra" and r["color_mode"] is None
+        )
         if not skip_light:
             n = len(r["brightness"]) or 1
             if sum(1 for b in r["brightness"] if b < CONFIG["dark_mean"] or b > CONFIG["bright_mean"]) / n >= 0.6:

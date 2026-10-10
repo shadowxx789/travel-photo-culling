@@ -1,6 +1,6 @@
 ---
 name: travel-photo-culling
-description: 整理旅行照片和视频：去重、筛出废片，按质量分为优秀/普通/待复核/待删除四档。只移动不删除，先出计划和预览，用户确认后才执行，可撤销。已适配 Insta360 Luna Ultra（LRV 代理、实况、I-Log、慢动作）。
+description: 整理旅行照片和视频：去重、筛出废片，按质量分为优秀/普通/待复核/待删除四档。只移动不删除，先出计划和预览，用户确认后才执行，可撤销。已适配 Insta360 Luna Ultra 与 Nikon Z5II（JPG+RAW）。
 ---
 
 # 旅行照片/视频粗筛
@@ -32,7 +32,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 所有输出都在 <目录>/99_报告/ 下。只要重跑过任何分析脚本，就必须重新生成 plan.json（execute.py 会拒绝比分析结果旧的 plan）。
 
 ## 4. 概念
-- 条目：scan.json 的 items，每条由 primary 加 companions 组成。实况照片（LIV）是一个 JPG 条目；RAW+JPG 算一个条目，primary 是 JPG。
+- 条目：scan.json 的 items，每条由 primary 加 companions 组成。实况照片（LIV）是一个 JPG 条目；RAW+JPG 算一个条目，primary 是 JPG。非 Luna 设备也可跨目录配对（双卡：Model 相同且 ShutterCount 相同，读不到时改用 DateTimeOriginal+SubSec 且主干相同）。内容完全相同的备份副本挂为 companion，标记 backup_copy，不参与分析、不算重复。primary 优先级 JPG > HIF > RAW；只有 RAW 时 kind="raw"。
 - LRV：视频的低清代理，永远是 companion。原片缺失的孤儿 LRV 不进 plan、不移动，只在汇报里提一句。
 - 场景：S###，拍摄间隔超过 10 分钟或 GPS 距离超过 500 米就切分。视频按 capture_s（真实拍摄时长）计算，不按播放时长。
 - 重复簇：照片用 D###，视频用 VD###。suggested_keep 只是脚本建议，最终保留哪条由视觉判断决定。similar_cross（普通照片和实况照片相似）只是提示，不算重复。
@@ -104,7 +104,9 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 孤儿 LRV 和其他异常：各用一句话说明。
 - 不要逐条刷屏；用户问到具体条目时再展开。
 
-## 10. Luna Ultra 适配
+## 10. 设备适配
+
+### Luna Ultra
 - 文件名格式为 IMG_/LIV_/VID_/LRV_YYYYMMDD_HHMMSS_序号。时间取自文件名，是本地时间。
 - 实况照片的 Make 字段为 QTI-AA，忽略即可。MPF 结构损坏的情况，脚本已经做了兜底读取。
 - I-Log 视频的拼图文件名带 _LOG，不扣曝光和色彩分。V3 已经按 color_mode 分组计算。
@@ -114,6 +116,17 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 校准记录（第一批，南京芜湖）：R2 命中的照片里没有一张是真正对焦失败，全都属于误杀清单里的情况；V2-hint 命中 0 次。以后如果出现真正模糊或抖动的样本，记录下来，供调整阈值参考。S011 视频（635/636/637）出现镜头起雾或水汽，拼图上显示为 V3，需从原片抽帧才能判断；低清拼图不能作为进入 00 的依据。
 - 外置盘为 exFAT 时，macOS 会在移动主文件时自动带走并改名对应的 ._ 文件，execute.py 在日志中记为 auto，这是正常现象，不算冲突。不要手动处理 ._ 文件。
 - 部分 Luna Ultra 照片的 Orientation 元数据错误（如 Rotate 180，但像素本身是正立的），导致拼图中画面倒置。遇到"整体倒置"时，先用 exiftool -Orientation 检查，并在不做 exif_transpose 的情况下查看原始像素；若是元数据问题，进 01，reason 为"复核-方向待旋转"，不要当作歪斜处理。
+
+### Nikon Z5II
+- JPG+NEF 整组同档；primary 是 JPG，NEF 为 companion。只有 NEF 时 kind="raw"，用内嵌预览分析。
+- 双卡：同一目录先按文件名主干配对；配不上再跨目录（Model 相同且 ShutterCount 相同；读不到 ShutterCount 时改用 DateTimeOriginal+SubSec 相同且主干相同）。移动时每个文件去 <TIER>/<它自己的原相对目录>/，整组同步加前缀和 _2。
+- 备份副本：Model、ShutterCount（或时间+主干）、扩展名、大小、MD5 全部相同的第二份，标记 backup_copy，跟随 primary 移动，不参与分析、不算重复。
+- 时钟：非 Luna 时间优先级为 SubSecDateTimeOriginal → DateTimeOriginal+OffsetTimeOriginal → DateTimeOriginal（本地）→ mtime，再加上 CONFIG device_offsets[Model] 的秒数。同一目录多台设备时，拍一张手机时钟来校对，或在 device_offsets 填写偏移（例如 {"NIKON Z5_2": -120}）。
+- 清晰度只和同一设备比较。R2 / 重复聚簇按 (device, subtype) 分区，不与 Luna 或其他机身聚簇。
+- zoom_bucket 按 focal35：≤40 wide / ≤105 mid / >105 tele；记录 lens。
+- 大光圈浅景深的背景虚化属于误杀清单，不能当作模糊进 00。
+- 高速连拍和预拍（C15/C30、Pre-Release Capture）产生的大量近似照片按重复簇处理，每簇默认保留 1 张，表情或动作明显不同的都保留。
+- NKSC_PARAM/ 跳过；.nksc 当 sidecar。.hif 若为 HLG 则 hdr=true，不打 R1/R3。.NEV 若 ffmpeg 解码不了：flags=["ERR"]，error="格式不支持"，不参与统计。
 
 ## 11. 禁止事项
 - 手动 mv / cp / rm 素材。

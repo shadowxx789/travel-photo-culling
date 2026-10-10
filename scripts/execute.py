@@ -79,7 +79,7 @@ def validate_plan(root, plan, scan, analysis, video):
         # 规则 3：proxy / 孤儿 LRV / sidecar 不能作 primary（先于成员检查，报错更准）
         if is_proxy(p) or p in orphans:
             errors.append("%s: proxy/孤儿 LRV 不能作为 primary: %s" % (tag, p))
-        if p in orphan_sc or Path(p).suffix.lower() in (".xmp", ".aae", ".thm"):
+        if p in orphan_sc or Path(p).suffix.lower() in (".xmp", ".aae", ".thm", ".nksc"):
             errors.append("%s: sidecar 不能作为 primary: %s" % (tag, p))
         if p not in scan_map:
             errors.append("%s: primary 不是 scan.json 条目: %s" % (tag, p))
@@ -168,6 +168,9 @@ def group_moves(root, entry, scan_map):
     reason = entry.get("reason") or ""
     primary = nfc(entry["primary"])
     names = [primary] + list(scan_map[primary].get("companions") or [])
+    for b in scan_map[primary].get("backup_copies") or []:
+        if b not in names:
+            names.append(b)
     pref = tier_prefix(tier, reason)
     tier_dir = TIER_DIRS[tier]
     suffix = ""

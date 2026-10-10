@@ -18,10 +18,10 @@ try:
 except ImportError:
     sys.exit("请先安装: pip install imagehash")
 
-from common import (CONFIG, DSU, contact_sheet, ensure_scan, gray_stats,
+from common import (CONFIG, DSU, contact_sheet, device_key, ensure_scan, gray_stats,
                     group_median, hamming, report_dir, require_heif, save_report)
 
-HEIC_EXTS = {".heic", ".heif"}
+HEIC_EXTS = {".heic", ".heif", ".hif"}
 PHOTO_KINDS = ("image", "photo", "raw")
 
 
@@ -45,27 +45,42 @@ def load_primary(path, primary_len=None):
 
 
 def load_raw_preview(path):
-    for tag in ("-PreviewImage", "-JpgFromRaw"):
+    """读取 PreviewImage / JpgFromRaw / OtherImage 中长边最大的一张。返回 (img, long_side)。"""
+    best = None
+    best_long = -1
+    for tag in ("-PreviewImage", "-JpgFromRaw", "-OtherImage"):
         data = subprocess.run(["exiftool", "-b", tag, str(path)],
                               capture_output=True).stdout
-        if data:
-            return _open_small(io.BytesIO(data))
-    raise RuntimeError("RAW 无内嵌预览")
+        if not data:
+            continue
+        try:
+            probe = Image.open(io.BytesIO(data))
+            long_side = max(probe.size)
+        except Exception:
+            continue
+        if long_side > best_long:
+            best_long = long_side
+            best = data
+    if not best:
+        raise RuntimeError("RAW 无内嵌预览")
+    return _open_small(io.BytesIO(best)), best_long
 
 
 # R2 分组：从细到粗，第一个样本数 >= min_group 的层级生效
 R2_KEYS = [
-    lambda it: (it["scene"], it["subtype"], it["zoom_bucket"]),
-    lambda it: (it["scene"], it["subtype"]),
-    lambda it: (it["subtype"], it["zoom_bucket"]),
-    lambda it: (it["subtype"],),
+    lambda it: (device_key(it), it["scene"], it["subtype"], it["zoom_bucket"]),
+    lambda it: (device_key(it), it["scene"], it["subtype"]),
+    lambda it: (device_key(it), it["subtype"], it["zoom_bucket"]),
+    lambda it: (device_key(it), it["subtype"]),
 ]
 
 
-def flag_of(rec, is_screenshot):
-    """screenshot 只记指标，不打 flag。"""
+def flag_of(rec, is_screenshot, skip_r1r3=False):
+    """screenshot 只记指标，不打 flag。HLG 不打 R1/R3。"""
     flags = []
     if is_screenshot:
+        return flags
+    if skip_r1r3:
         return flags
     if (rec["brightness"] < CONFIG["dark_mean"] or rec["brightness"] > CONFIG["bright_mean"]
             or rec["entropy"] < CONFIG["entropy_min"]):
@@ -82,14 +97,14 @@ def phash_int(hexstr):
 
 
 def cluster_dups(recs):
-    """同 subtype 内聚簇。返回 {(primary): (dup_group, dup_size, suggested_keep)}。"""
-    by_sub = {}
+    """同 (device, subtype) 内聚簇。返回 {(primary): (dup_group, dup_size, suggested_keep)}。"""
+    by_part = {}
     for r in recs:
-        by_sub.setdefault(r["subtype"], []).append(r)
+        by_part.setdefault((device_key(r), r["subtype"]), []).append(r)
     out = {}
     dcount = 0
-    for sub in sorted(by_sub):
-        rows = by_sub[sub]
+    for part in sorted(by_part):
+        rows = by_part[part]
         dsu = DSU(len(rows))
         for i in range(len(rows)):
             for j in range(i + 1, len(rows)):
@@ -143,19 +158,29 @@ def main():
 
     recs = []
     fallback_n = 0
+    raw_preview_warn = 0
     for it in photos:
         p = root / it["primary"]
+        ext = Path(it["primary"]).suffix.lower()
+        hlg = ext in HEIC_EXTS and (
+            "hlg" in str(it.get("color_transfer") or "").lower()
+            or "arib-std-b67" in str(it.get("color_transfer") or "").lower()
+        )
         rec = {
             "primary": it["primary"],
             "id": it["id"],
             "kind": it["kind"],
             "subtype": it["subtype"],
+            "device": it.get("device"),
             "scene": it["scene"],
             "time": it["time"],
             "zoom_bucket": it["zoom_bucket"],
             "focal35": it["focal35"],
             "zoom_ratio": it["zoom_ratio"],
             "screenshot": bool(it.get("screenshot")),
+            "hdr": bool(hlg),
+            "raw_preview_px": None,
+            "raw_preview_warning": False,
             "flags": [],
             "r2_level": None,
             "r2_median": None,
@@ -172,14 +197,18 @@ def main():
         }
         try:
             if it["kind"] == "raw":
-                img = load_raw_preview(p)
+                img, long_side = load_raw_preview(p)
+                rec["raw_preview_px"] = long_side
+                if long_side < CONFIG["raw_preview_min_px"]:
+                    rec["raw_preview_warning"] = True
+                    raw_preview_warn += 1
             else:
                 img, fb = load_primary(p, it.get("primary_len"))
                 rec["load_fallback"] = fb
                 fallback_n += 1 if fb else 0
             rec.update(gray_stats(img))
             rec["phash"] = str(imagehash.phash(img))
-            rec["flags"] = flag_of(rec, it.get("screenshot"))
+            rec["flags"] = flag_of(rec, it.get("screenshot"), skip_r1r3=rec["hdr"])
             rec["_img"] = img
         except Exception as e:
             rec["error"] = "%s: %s" % (type(e).__name__, e)
@@ -260,6 +289,7 @@ def main():
         "r2_level_dist": r2_dist,
         "read_errors": len(errors),
         "load_fallback": fallback_n,
+        "raw_preview_warnings": raw_preview_warn,
         "dup_clusters": len(dup_groups),
         "dup_groups": dup_groups,
         "similar_cross_pairs": x_pairs,
