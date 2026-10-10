@@ -45,7 +45,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - reason 只能包含中文、字母、数字和 -，不超过 20 个字。
 
 ## 6. 流程
-**Phase 1 扫描**：运行 scan.py，向用户汇报以下内容：照片数（其中实况多少）、视频数（有 LRV / 缺 LRV / 慢动作）、孤儿 LRV、时间跨度、场景数、时间警告。如果有时间警告或时区提示，先问用户，再往下走。
+**Phase 1 扫描**：运行 scan.py，向用户汇报以下内容：照片数（其中实况多少）、视频数（有 LRV / 缺 LRV / 慢动作）、孤儿 LRV、时间跨度、场景数、时间警告。有多台设备时按设备分别报：张数、JPG+RAW 组数、仅 RAW、仅 JPG、跨目录配对数、备份副本数、时间范围。如果有时间警告或时区提示，先问用户，再往下走。
 
 **Phase 2 分析**：运行 analyze.py 和 analyze_video.py。读取失败或抽帧失败的条目直接放进 01，reason 为"复核-无法读取"。
 
@@ -119,8 +119,8 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 
 ### Nikon Z5II
 - JPG+NEF 整组同档；primary 是 JPG，NEF 为 companion。只有 NEF 时 kind="raw"，用内嵌预览分析。
-- 双卡：同一目录先按文件名主干配对；配不上再跨目录（Model 相同且 ShutterCount 相同；读不到 ShutterCount 时改用 DateTimeOriginal+SubSec 相同且主干相同）。移动时每个文件去 <TIER>/<它自己的原相对目录>/，整组同步加前缀和 _2。
-- 备份副本：Model、ShutterCount（或时间+主干）、扩展名、大小、MD5 全部相同的第二份，标记 backup_copy，跟随 primary 移动，不参与分析、不算重复。
+- 本人使用单卡；跨目录配对和备份副本仅用于重复导入或合并目录的兜底场景。双卡逻辑仍保留：同一目录先按文件名主干配对；配不上再跨目录（Model 相同且 ShutterCount 相同；读不到 ShutterCount 时改用 DateTimeOriginal+SubSec 相同且主干相同）。移动时每个文件去 <TIER>/<它自己的原相对目录>/，整组同步加前缀和 _2。
+- 备份副本：Model、ShutterCount（或时间+主干）、扩展名、大小、MD5 全部相同的第二份，标记 backup_copy，跟随 primary 移动，不参与分析、不算重复。必须先完成同目录/跨目录配对，再把副本并入已有条目；先按路径排序挑 canonical 会让备份 JPG 抢走 primary，再把另一个目录里同主干的 NEF 错配成跨目录。
 - 时钟：非 Luna 时间优先级为 SubSecDateTimeOriginal → DateTimeOriginal+OffsetTimeOriginal → DateTimeOriginal（本地）→ mtime，再加上 CONFIG device_offsets[Model] 的秒数。同一目录多台设备时，拍一张手机时钟来校对，或在 device_offsets 填写偏移（例如 {"NIKON Z5_2": -120}）。
 - 清晰度只和同一设备比较。R2 / 重复聚簇按 (device, subtype) 分区，不与 Luna 或其他机身聚簇。
 - zoom_bucket 按 focal35：≤40 wide / ≤105 mid / >105 tele；记录 lens。
@@ -133,3 +133,13 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 未经确认就运行 --apply 或 --cleanup --yes。
 - 把 LRV、孤儿 LRV 或 sidecar 写进 plan。
 - 分析结果重跑后，继续沿用旧 plan。
+- 已经 --apply 过的真实行程目录（分档目录已在）不要再跑 scan/analyze：这会改写里面的 99_报告/，回归用拍平到 /tmp 的副本。
+
+## 12. 改脚本 / 扩设备
+- 换码前把 scripts/ 从当前 HEAD 拷出一份；Luna 回归用旧脚本跑基线。代码一改，旧输出就重建不了。
+- 回归对比只认 kind、subtype、scene、zoom_bucket、flags、dup_group。新增 lens / backup_copies / color_transfer 不算破坏 Luna。
+- 从 02_优秀 / 03_普通 拷文件做回归时必须拍平到临时目录根下。保留分档目录名会被 SKIP_DIRS 跳过，scan 会当成空目录。
+- 非 Luna 的 zoom_bucket 用 40/105 硬分档，不要改 CONFIG 的 zoom_tele_max。Luna 镜头未匹配时仍走原来的 wide/tele/digital。
+- 调查阶段：样本被拍平、没有 NKSC_PARAM/视频，只要 Model、主干配对、ShutterCount、时间字段符合设计，就不是停下来的「不符」。DCIM 结构是要描述的现象，不是硬门槛。
+- 合成 NEF：先对 JPG 写 exif 再 copy 成 .NEF。exiftool 对「JPEG 内容 + .NEF 扩展名」直接 -overwrite_original 会失败。
+- 非 Luna 的 device 用 Model 原文（如 NIKON Z5_2），不要拼 Make。Luna 仍是 Insta360 Luna Ultra，device_key 返回 luna。
