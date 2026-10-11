@@ -18,7 +18,7 @@ try:
 except ImportError:
     sys.exit("请先安装: pip install imagehash")
 
-from common import (CONFIG, DSU, contact_sheet, device_key, ensure_scan, gray_stats,
+from common import (CONFIG, DSU, attach_dup_diag, contact_sheet, device_key, ensure_scan, gray_stats,
                     group_median, hamming, report_dir, require_heif, save_report,
                     sharpness)
 
@@ -112,34 +112,6 @@ def sharp_tile_max_of(rgb_img):
                 continue
             vals.append(sharpness(tile))
     return round(float(max(vals)), 1) if vals else None
-
-
-def attach_dup_diag(recs, dist_fn):
-    """聚簇规则不变。给已成簇的条目填 dup_span_s / dup_maxdist / dup_loose。"""
-    groups = {}
-    for r in recs:
-        g = r.get("dup_group")
-        if g:
-            groups.setdefault(g, []).append(r)
-    for g, mem in groups.items():
-        mem = sorted(mem, key=lambda x: x["time"] if x.get("time") is not None else 0)
-        span = 0.0
-        if mem[0].get("time") is not None and mem[-1].get("time") is not None:
-            span = mem[-1]["time"] - mem[0]["time"]
-        maxd = 0
-        for i in range(len(mem)):
-            for j in range(i + 1, len(mem)):
-                maxd = max(maxd, dist_fn(mem[i], mem[j]))
-        loose = (len(mem) >= 6) or (maxd > CONFIG["burst_phash"])
-        for r in mem:
-            r["dup_span_s"] = round(span, 3)
-            r["dup_maxdist"] = maxd
-            r["dup_loose"] = bool(loose)
-    for r in recs:
-        if not r.get("dup_group"):
-            r["dup_span_s"] = None
-            r["dup_maxdist"] = None
-            r["dup_loose"] = False
 
 
 def cluster_dups(recs):

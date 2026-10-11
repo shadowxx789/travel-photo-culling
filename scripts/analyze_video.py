@@ -16,7 +16,7 @@ try:
 except ImportError:
     sys.exit("请先安装: pip install imagehash")
 
-from common import (CONFIG, DSU, contact_sheet, device_key, ensure_scan, gray_stats, group_median,
+from common import (CONFIG, DSU, attach_dup_diag, contact_sheet, device_key, ensure_scan, gray_stats, group_median,
                     hamming, is_proxy, report_dir, require_bins, save_report)
 
 HDR_TRANSFERS = ("arib-std-b67", "smpte2084")
@@ -348,32 +348,9 @@ def main():
         if len(a["phashes"]) != len(b["phashes"]):
             return 0
         dists = [hamming(int(x, 16), int(y, 16)) for x, y in zip(a["phashes"], b["phashes"])]
-        return max(dists) if dists else 0
+        return (sum(dists) / float(len(dists))) if dists else 0
 
-    groups = {}
-    for r in recs:
-        g = r.get("dup_group")
-        if g:
-            groups.setdefault(g, []).append(r)
-    for g, mem in groups.items():
-        mem = sorted(mem, key=lambda x: x["time"] if x.get("time") is not None else 0)
-        span = 0.0
-        if mem[0].get("time") is not None and mem[-1].get("time") is not None:
-            span = mem[-1]["time"] - mem[0]["time"]
-        maxd = 0
-        for i in range(len(mem)):
-            for j in range(i + 1, len(mem)):
-                maxd = max(maxd, _vdist(mem[i], mem[j]))
-        loose = (len(mem) >= 6) or (maxd > CONFIG["burst_phash"])
-        for r in mem:
-            r["dup_span_s"] = round(span, 3)
-            r["dup_maxdist"] = maxd
-            r["dup_loose"] = bool(loose)
-    for r in recs:
-        if not r.get("dup_group"):
-            r["dup_span_s"] = None
-            r["dup_maxdist"] = None
-            r["dup_loose"] = False
+    attach_dup_diag(recs, _vdist)
 
     # 7) 拼图
     sdir = report_dir(root) / "sheets" / "video"

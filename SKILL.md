@@ -35,7 +35,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 条目：scan.json 的 items，每条由 primary 加 companions 组成。实况照片（LIV）是一个 JPG 条目；RAW+JPG 算一个条目，primary 是 JPG。非 Luna 设备也可跨目录配对（双卡：Model 相同且 ShutterCount 相同，读不到时改用 DateTimeOriginal+SubSec 且主干相同）。内容完全相同的备份副本挂为 companion，标记 backup_copy，不参与分析、不算重复。primary 优先级 JPG > HIF > RAW；只有 RAW 时 kind="raw"。
 - LRV：视频的低清代理，永远是 companion。原片缺失的孤儿 LRV 不进 plan、不移动，只在汇报里提一句。
 - 场景：S###，拍摄间隔超过 10 分钟或 GPS 距离超过 500 米就切分。视频按 capture_s（真实拍摄时长）计算，不按播放时长。
-- 重复簇：照片用 D###，视频用 VD###。suggested_keep 只是脚本建议，最终保留哪条由视觉判断决定。similar_cross（普通照片和实况照片相似）只是提示，不算重复。
+- 重复簇：照片用 D###，视频用 VD###。suggested_keep 只是脚本建议，最终保留哪条由视觉判断决定。similar_cross（普通照片和实况照片相似）只是提示，不算重复。dup_span_s / dup_maxdist / dup_loose 是诊断字段：簇规模 ≥ 6 或 dup_maxdist > burst_phash 则为 dup_loose，不改变聚簇规则。
 - 拼图：照片 99_报告/sheets/photo/Sxxx_nn.jpg（3×3，标签格式为"#编号 flags 簇号"）；视频 sheets/video/<scene>_<id>[_LOG|_HDR][_SLOW].jpg（3×2，每格标出 t=秒）。
 
 ## 5. 分档目录与 reason
@@ -127,10 +127,14 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 大光圈浅景深的背景虚化属于误杀清单，不能当作模糊进 00。
 - 高速连拍和预拍（C15/C30、Pre-Release Capture）产生的大量近似照片按重复簇处理，每簇默认保留 1 张，表情或动作明显不同的都保留。
 - NKSC_PARAM/ 跳过；.nksc 当 sidecar。.hif 若为 HLG 则 hdr=true，不打 R1/R3。.NEV 若 ffmpeg 解码不了：flags=["ERR"]，error="格式不支持"，不参与统计。
-- 校准记录（盐城批）：R2 抽查 10 张，真模糊 4（其中 3 张隔玻璃拍动物）、浅景深虚化 4、清晰误判 2（大面积天空）；三类的 r2_ratio 完全重叠，不能靠调 blur_ratio 区分。隔着玻璃对焦失败属于真模糊，不在误杀清单里。
+- 校准记录（盐城批）：R2 抽查 10 张，真模糊 4（其中 3 张隔玻璃拍动物）、浅景深虚化 4、清晰误判 2（大面积天空）；三类的 r2_ratio 完全重叠，不能靠调 blur_ratio 区分。sharp_tile_max / tile_ratio 是诊断字段、不参与任何 flag；tile_ratio 同样分不开真模糊和浅景深，不要靠它改阈值。隔着玻璃对焦失败属于真模糊，不在误杀清单里。
 
 ## 11. 禁止事项
 - 手动 mv / cp / rm 素材。
 - 未经确认就运行 --apply 或 --cleanup --yes。
 - 把 LRV、孤儿 LRV 或 sidecar 写进 plan。
 - 分析结果重跑后，继续沿用旧 plan。
+- 已经 --apply 过的真实行程目录（分档目录已在）不要再跑 scan/analyze：这会改写里面的 99_报告/，回归用拍平到 /tmp 的副本。
+
+## 12. 改脚本 / 扩设备
+改脚本或扩展设备前先读 DEVELOPING.md。

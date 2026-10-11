@@ -127,6 +127,36 @@ def hamming(a, b):
     return bin(a ^ b).count("1")
 
 
+def attach_dup_diag(recs, dist_fn):
+    """聚簇规则不变。给已成簇的条目填 dup_span_s / dup_maxdist / dup_loose。"""
+    groups = {}
+    for r in recs:
+        g = r.get("dup_group")
+        if g:
+            groups.setdefault(g, []).append(r)
+    for g, mem in groups.items():
+        mem = sorted(mem, key=lambda x: x["time"] if x.get("time") is not None else 0)
+        span = 0.0
+        if mem[0].get("time") is not None and mem[-1].get("time") is not None:
+            span = mem[-1]["time"] - mem[0]["time"]
+        maxd = 0
+        for i in range(len(mem)):
+            for j in range(i + 1, len(mem)):
+                d = dist_fn(mem[i], mem[j])
+                if d > maxd:
+                    maxd = d
+        loose = (len(mem) >= 6) or (maxd > CONFIG["burst_phash"])
+        for r in mem:
+            r["dup_span_s"] = round(span, 3)
+            r["dup_maxdist"] = maxd
+            r["dup_loose"] = bool(loose)
+    for r in recs:
+        if not r.get("dup_group"):
+            r["dup_span_s"] = None
+            r["dup_maxdist"] = None
+            r["dup_loose"] = False
+
+
 class DSU:
     def __init__(self, n):
         self.p = list(range(n))
