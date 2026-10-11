@@ -74,11 +74,11 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 污损：镜头脏污或起雾，导致画面大面积受损。
 - 过短（视频）：命中 V1，而且内容是误触；短但有内容的片段放进 01。
 - 抖动（视频）：shake 分数高，而且抽出的连续帧确认画面没法看。只有 V2-hint 的放进 01，reason 为"复核-疑似抖动"。
-- 重复：同一簇里没被选为保留的那些。每簇默认保留 1 条；表情或姿势明显不同的都保留。
+- 重复：同一簇里没被选为保留的那些。每簇默认保留 1 条；表情或姿势明显不同的都保留。dup_loose 的簇是连成一串的，必须看全部成员，按"不同瞬间各保留 1 张"处理，不能整簇只留 1 张。
 
 **唯一记录保底**：如果某个场景只剩这一条，或者它是某个人、某个地点唯一的记录，那么即使有缺陷也放进 01，reason 为"复核-唯一记录"。
 
-**02 优秀**：在每个场景内按"内容价值 > 技术质量 > 构图"排序，最多取 3 条，而且技术上不能有明显缺陷。宁缺毋滥，一个场景可以一条都不选。
+**02 优秀**：在每个场景内按"内容价值 > 技术质量 > 构图"排序，最多取 3 条；场景照片超过 50 张时最多 5 条。技术上不能有明显缺陷。宁缺毋滥，一个场景可以一条都不选。
 
 **01 待复核**：包括拿不准是否有意为之的、唯一记录、截图和票据、无法读取的、疑似抖动的，以及需要用户来判断人物的。
 
@@ -127,19 +127,10 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 大光圈浅景深的背景虚化属于误杀清单，不能当作模糊进 00。
 - 高速连拍和预拍（C15/C30、Pre-Release Capture）产生的大量近似照片按重复簇处理，每簇默认保留 1 张，表情或动作明显不同的都保留。
 - NKSC_PARAM/ 跳过；.nksc 当 sidecar。.hif 若为 HLG 则 hdr=true，不打 R1/R3。.NEV 若 ffmpeg 解码不了：flags=["ERR"]，error="格式不支持"，不参与统计。
+- 校准记录（盐城批）：R2 抽查 10 张，真模糊 4（其中 3 张隔玻璃拍动物）、浅景深虚化 4、清晰误判 2（大面积天空）；三类的 r2_ratio 完全重叠，不能靠调 blur_ratio 区分。隔着玻璃对焦失败属于真模糊，不在误杀清单里。
 
 ## 11. 禁止事项
 - 手动 mv / cp / rm 素材。
 - 未经确认就运行 --apply 或 --cleanup --yes。
 - 把 LRV、孤儿 LRV 或 sidecar 写进 plan。
 - 分析结果重跑后，继续沿用旧 plan。
-- 已经 --apply 过的真实行程目录（分档目录已在）不要再跑 scan/analyze：这会改写里面的 99_报告/，回归用拍平到 /tmp 的副本。
-
-## 12. 改脚本 / 扩设备
-- 换码前把 scripts/ 从当前 HEAD 拷出一份；Luna 回归用旧脚本跑基线。代码一改，旧输出就重建不了。
-- 回归对比只认 kind、subtype、scene、zoom_bucket、flags、dup_group。新增 lens / backup_copies / color_transfer 不算破坏 Luna。
-- 从 02_优秀 / 03_普通 拷文件做回归时必须拍平到临时目录根下。保留分档目录名会被 SKIP_DIRS 跳过，scan 会当成空目录。
-- 非 Luna 的 zoom_bucket 用 40/105 硬分档，不要改 CONFIG 的 zoom_tele_max。Luna 镜头未匹配时仍走原来的 wide/tele/digital。
-- 调查阶段：样本被拍平、没有 NKSC_PARAM/视频，只要 Model、主干配对、ShutterCount、时间字段符合设计，就不是停下来的「不符」。DCIM 结构是要描述的现象，不是硬门槛。
-- 合成 NEF：先对 JPG 写 exif 再 copy 成 .NEF。exiftool 对「JPEG 内容 + .NEF 扩展名」直接 -overwrite_original 会失败。
-- 非 Luna 的 device 用 Model 原文（如 NIKON Z5_2），不要拼 Make。Luna 仍是 Insta360 Luna Ultra，device_key 返回 luna。

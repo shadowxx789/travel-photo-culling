@@ -152,8 +152,9 @@ def empty_rec(it):
         "capture_s": it.get("capture_s"), "slowmo_factor": it.get("slowmo_factor"),
         "median_sharp": None, "brightness": [], "clip_high": [], "clip_low": [],
         "phashes": [], "shake": None, "v3_median": None, "v3_level": None,
-        "v3_n": None, "v3_ratio": None, "flags": [], "dup_group": None,
-        "dup_size": None, "suggested_keep": None, "sheet": None, "error": None,
+        "v3_n": None, "v3_ratio": None, "flags": [],
+        "dup_group": None, "dup_size": None, "suggested_keep": None, "sheet": None, "error": None,
+        "dup_span_s": None, "dup_maxdist": None, "dup_loose": False,
         "_imgs": [],
     }
 
@@ -340,6 +341,39 @@ def main():
             r["dup_group"] = label
             r["dup_size"] = len(rows)
             r["suggested_keep"] = keep["primary"]
+
+    def _vdist(a, b):
+        if not a.get("phashes") or not b.get("phashes"):
+            return 0
+        if len(a["phashes"]) != len(b["phashes"]):
+            return 0
+        dists = [hamming(int(x, 16), int(y, 16)) for x, y in zip(a["phashes"], b["phashes"])]
+        return max(dists) if dists else 0
+
+    groups = {}
+    for r in recs:
+        g = r.get("dup_group")
+        if g:
+            groups.setdefault(g, []).append(r)
+    for g, mem in groups.items():
+        mem = sorted(mem, key=lambda x: x["time"] if x.get("time") is not None else 0)
+        span = 0.0
+        if mem[0].get("time") is not None and mem[-1].get("time") is not None:
+            span = mem[-1]["time"] - mem[0]["time"]
+        maxd = 0
+        for i in range(len(mem)):
+            for j in range(i + 1, len(mem)):
+                maxd = max(maxd, _vdist(mem[i], mem[j]))
+        loose = (len(mem) >= 6) or (maxd > CONFIG["burst_phash"])
+        for r in mem:
+            r["dup_span_s"] = round(span, 3)
+            r["dup_maxdist"] = maxd
+            r["dup_loose"] = bool(loose)
+    for r in recs:
+        if not r.get("dup_group"):
+            r["dup_span_s"] = None
+            r["dup_maxdist"] = None
+            r["dup_loose"] = False
 
     # 7) 拼图
     sdir = report_dir(root) / "sheets" / "video"
