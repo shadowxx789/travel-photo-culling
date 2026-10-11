@@ -21,6 +21,7 @@ except ImportError:
 from common import (CONFIG, DSU, attach_dup_diag, contact_sheet, device_key, ensure_scan, gray_stats,
                     group_median, hamming, report_dir, require_heif, save_report,
                     sharpness)
+from faces import analyze_faces, face_timing, fields_from_faces
 
 HEIC_EXTS = {".heic", ".heif", ".hif"}
 PHOTO_KINDS = ("image", "photo", "raw")
@@ -138,7 +139,17 @@ def cluster_dups(recs):
             label = "D%03d" % dcount
             clean = [rows[i] for i in members if not ({"R1", "R3-high", "R3-low"} & set(rows[i]["flags"]))]
             pool = clean or [rows[i] for i in members]
-            keep = max(pool, key=lambda r: r["sharp_p90"] or 0)
+
+            def _keep_rank(r):
+                closed = r.get("eyes_closed_n")
+                half = r.get("eyes_half_n")
+                if closed is None:
+                    closed = 0
+                if half is None:
+                    half = 0
+                return (-closed, -half, r.get("sharp_p90") or 0)
+
+            keep = max(pool, key=_keep_rank)
             for i in members:
                 out[rows[i]["primary"]] = (label, len(members), keep["primary"])
     return out
@@ -217,6 +228,11 @@ def main():
             "dup_span_s": None,
             "dup_maxdist": None,
             "dup_loose": False,
+            "faces_n": None,
+            "subject_faces_n": None,
+            "eyes_closed_n": None,
+            "eyes_half_n": None,
+            "faces": None,
         }
         try:
             if it["kind"] == "raw":
@@ -233,6 +249,7 @@ def main():
             rec["sharp_tile_max"] = sharp_tile_max_of(img)
             rec["phash"] = str(imagehash.phash(img))
             rec["flags"] = flag_of(rec, it.get("screenshot"), skip_r1r3=rec["hdr"])
+            rec.update(fields_from_faces(analyze_faces(img)))
             rec["_img"] = img
         except Exception as e:
             rec["error"] = "%s: %s" % (type(e).__name__, e)
@@ -252,6 +269,10 @@ def main():
             continue
         if m is not None and (r["sharp_p90"] or 0) < m * CONFIG["blur_ratio"]:
             r["flags"].append("R2")
+        if r.get("eyes_closed_n"):
+            r["flags"].append("EYE")
+        elif r.get("eyes_half_n"):
+            r["flags"].append("EYE-half")
 
     # 诊断：tile_ratio，层级与样本数规则与 R2 完全一致，不参与 flag
     tmed = group_median(ok, R2_KEYS, "sharp_tile_max", CONFIG["min_group"])
@@ -328,11 +349,13 @@ def main():
     }
     out = save_report(root, "analysis.json", meta, recs)
     dt = time.time() - t0
-    print("照片 %d：读取失败 %d（兜底 %d），R1 %d，R2 %d，R3-high %d，R3-low %d，dup 簇 %d，cross %d 对，拼图 %d 张，用时 %.1fs"
+    _fn, _fs, face_ms = face_timing()
+    print("照片 %d：读取失败 %d（兜底 %d），R1 %d，R2 %d，R3-high %d，R3-low %d，EYE %d，EYE-half %d，dup 簇 %d，cross %d 对，拼图 %d 张，用时 %.1fs，人脸 %.0fms/张"
           % (len(recs), len(errors), fallback_n,
              flag_counts.get("R1", 0), flag_counts.get("R2", 0),
              flag_counts.get("R3-high", 0), flag_counts.get("R3-low", 0),
-             len(dup_groups), x_pairs, len(sheets), dt))
+             flag_counts.get("EYE", 0), flag_counts.get("EYE-half", 0),
+             len(dup_groups), x_pairs, len(sheets), dt, face_ms))
     print("→ " + str(out))
 
 

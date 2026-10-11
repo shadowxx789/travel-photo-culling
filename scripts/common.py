@@ -42,6 +42,16 @@ CONFIG = {
     "shake_hint": 1.0,         # 暂定值；待真实抖动样本校准
     "device_offsets": {},      # Model → 时钟偏移秒数，例如 {"NIKON Z5_2": -120}
     "raw_preview_min_px": 1600,
+    "eye_score": 0.7,
+    "eye_expand": 0.4,
+    "eye_crop_min": 128,
+    "eye_t_closed": 0.5,
+    "eye_t_half": 0.35,
+    "eye_yaw_unsure": 0.55,
+    "eye_h_min_frac": 0.03,
+    "eye_subject_h_frac": 0.08,
+    "eye_subject_area_frac": 0.25,
+    "eye_smile_squint": 0.4,
 }
 
 

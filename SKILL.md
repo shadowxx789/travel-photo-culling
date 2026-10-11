@@ -10,7 +10,7 @@ description: 整理旅行照片和视频：去重、筛出废片，按质量分�
 2. 先出计划再执行。用户没有明确说"执行"之前，不得运行 --apply。
 3. 成组处理。原片、LRV、sidecar、._ 文件由 execute.py 一起移动。禁止手动 mv / cp / rm 素材。
 4. 价值优先于完美。有纪念意义或唯一的记录，技术瑕疵不能作为删除理由。
-5. 脚本 flag 只是候选。所有 flag 都要经过视觉确认才能用于分档；R2、V3、V2-hint 任何情况下都不能单独作为进入 00 的依据。
+5. 脚本 flag 只是候选。所有 flag 都要经过视觉确认才能用于分档；R2、V3、V2-hint、EYE、EYE-half 任何情况下都不能单独作为进入 00 的依据。
 6. 不修改素材内容，不调整脚本阈值（除非用户要求）。除 99_报告/ 外，不在素材目录写任何文件。
 
 ## 2. 规则优先级
@@ -21,6 +21,7 @@ description: 整理旅行照片和视频：去重、筛出废片，按质量分�
 ```bash
 cd /Users/ew/.hermes/skills/media/travel-photo-culling && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 # 另需 exiftool 和 ffmpeg：brew install exiftool ffmpeg
+# 闭眼检测模型（不进 git）：bash scripts/fetch_models.sh
 ```
 运行（PY=/Users/ew/.hermes/skills/media/travel-photo-culling/.venv/bin/python）：
 ```bash
@@ -40,7 +41,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 
 ## 5. 分档目录与 reason
 - 00_待删除：reason 必须是以下之一：模糊、过曝、欠曝、歪斜、闭眼、遮挡、误拍、污损、过短、抖动、重复。填"重复"时必须同时填 keep，keep 要在同一簇里，而且本身不能在 00。
-- 01_待复核：reason 以"复核-"开头。常用的有：复核-唯一记录、复核-截图票据、复核-边界、复核-无法读取、复核-疑似抖动。
+- 01_待复核：reason 以「复核-」开头。常用的有：复核-唯一记录、复核-截图票据、复核-边界、复核-无法读取、复核-疑似抖动、复核-闭眼。
 - 02_优秀、03_普通：reason 可以不填。
 - reason 只能包含中文、字母、数字和 -，不超过 20 个字。
 
@@ -51,7 +52,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 
 **Phase 3 视觉复核**（逐个场景）：
 - 先把这个场景的全部照片拼图看一遍。
-- 以下情况要看原图：命中 flag 的；在重复簇里挑保留的；候选优秀的；需要判断闭眼、歪斜或污损的。看原图时先用 PIL 缩到长边 1600 像素，不要直接载入超大图。
+- 以下情况要看原图：命中 flag 的（含全部 R2 / R3 / EYE / EYE-half）；dup_loose 簇的全部成员；其余重复簇里要挑保留的；候选 02 的；需要判断闭眼、歪斜或污损的。其余看拼图即可。看原图时先用 PIL 缩到长边 1600 像素，不要直接载入超大图。
 - 视频看拼图，判断模糊、曝光和内容。拼图的相邻两格间隔好几秒，不能用来判断抖动。抖动只看 shake 分数；需要时抽连续 1 秒的帧来确认。
 - 每个条目用一句话记下判断。
 
@@ -69,7 +70,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 误拍：黑屏、纯色、口袋里误拍、全程拍地面或镜头盖。
 - 模糊：主体整体失焦，或者糊到看不清。局部的动态模糊不算。
 - 过曝 / 欠曝：主体细节已经无法辨认，而且不是有意为之（剪影、高调、夜景这类不算）。
-- 闭眼 / 遮挡：人像主体闭眼，或者被手指、杂物挡住，并且同一簇里有更好的一张。
+- 闭眼 / 遮挡：人像主体闭眼，或者被手指、杂物挡住，并且同一簇里有更好的一张。EYE / EYE-half 必须视觉确认，不能单独进 00。处置：①在重复簇里且有睁眼的同簇成员：可按「重复」进 00，keep 填睁眼那张；②唯一记录或簇内全员闭眼：进 01（reason 复核-闭眼）或按价值留在 02/03，不得进 00；③合影里只有个别人闭眼、且没有替代张：留在 02/03，在 review_notes 里注明。
 - 歪斜：明显是无意造成的倾斜，而且内容没有特殊价值。这一项要保守判断。
 - 污损：镜头脏污或起雾，导致画面大面积受损。
 - 过短（视频）：命中 V1，而且内容是误触；短但有内容的片段放进 01。
@@ -95,6 +96,7 @@ $PY /Users/ew/.hermes/skills/media/travel-photo-culling/scripts/execute.py "<目
 - 慢动作视频：没有音轨、没有 LRV、近景配平滑背景导致 V3 偏低，这些都正常。
 - 数码裁切档（w_crop / t_crop）画质偏软。只和同一档的照片比较。
 - 截图和票据。统一放进 01，不删。
+- 故意闭眼：大笑眯眼、表演、睡觉的孩子。属于误杀，不按闭眼进 00。
 
 ## 9. 汇报格式（Phase 5）
 - 四档各自的条目数、文件数和总大小。

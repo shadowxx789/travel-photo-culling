@@ -3,3 +3,4 @@ pillow-heif
 imagehash
 opencv-python
 numpy
+mediapipe
