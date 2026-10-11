@@ -348,7 +348,7 @@ def main():
         if len(a["phashes"]) != len(b["phashes"]):
             return 0
         dists = [hamming(int(x, 16), int(y, 16)) for x, y in zip(a["phashes"], b["phashes"])]
-        return (sum(dists) / float(len(dists))) if dists else 0
+        return round(sum(dists) / float(len(dists)), 2) if dists else 0
 
     attach_dup_diag(recs, _vdist)
 
