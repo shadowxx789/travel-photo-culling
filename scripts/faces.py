@@ -7,6 +7,11 @@ from PIL import Image
 
 from common import CONFIG
 
+try:
+    _LANCZOS = Image.Resampling.LANCZOS
+except AttributeError:
+    _LANCZOS = Image.LANCZOS
+
 SKILL_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = SKILL_DIR / "models"
 YUNET_NAME = "face_detection_yunet_2023mar.onnx"
@@ -262,6 +267,70 @@ def _pick_face(result, crop, orig, cw, ch):
     return best
 
 
+def _crop_xy(ox, oy, obw, obh, expand, ow, oh):
+    cx = ox + obw / 2.0
+    cy = oy + obh / 2.0
+    nw = obw * (1.0 + expand)
+    nh = obh * (1.0 + expand)
+    x0 = int(round(cx - nw / 2.0))
+    y0 = int(round(cy - nh / 2.0))
+    x1 = int(round(cx + nw / 2.0))
+    y1 = int(round(cy + nh / 2.0))
+    x0 = max(0, x0)
+    y0 = max(0, y0)
+    x1 = min(ow, x1)
+    y1 = min(oh, y1)
+    return x0, y0, x1, y1
+
+
+def _run_landmarker(landmarker, mp, np, img, rec, orig, expand, ow, oh, img_short):
+    """成功填充 rec 并返回 True。"""
+    ox, oy, obw, obh = orig
+    x0, y0, x1, y1 = _crop_xy(ox, oy, obw, obh, expand, ow, oh)
+    cw, ch = x1 - x0, y1 - y0
+    if cw < 4 or ch < 4:
+        return False
+    crop = img.crop((x0, y0, x1, y1))
+    send = crop
+    short = min(cw, ch)
+    up_min = int(CONFIG.get("eye_upscale_min", 256))
+    if short < up_min:
+        sc = up_min / float(short)
+        send = crop.resize((max(1, int(round(cw * sc))), max(1, int(round(ch * sc)))), _LANCZOS)
+    rgb = np.array(send)
+    if rgb.dtype != np.uint8:
+        rgb = rgb.astype("uint8")
+    if not rgb.flags["C_CONTIGUOUS"]:
+        rgb = np.ascontiguousarray(rgb)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    result = landmarker.detect(mp_image)
+    idx = _pick_face(result, (x0, y0, x1, y1), orig, cw, ch)
+    if idx is None:
+        return False
+    lms = result.face_landmarks[idx]
+    cats = result.face_blendshapes[idx] if result.face_blendshapes else []
+    rec["blink_l"] = _bs(cats, "eyeBlinkLeft")
+    rec["blink_r"] = _bs(cats, "eyeBlinkRight")
+    sl = _bs(cats, "eyeSquintLeft")
+    sr = _bs(cats, "eyeSquintRight")
+    rec["squint"] = None if sl is None and sr is None else round(max(sl or 0.0, sr or 0.0), 4)
+    ml = _bs(cats, "mouthSmileLeft")
+    mr = _bs(cats, "mouthSmileRight")
+    rec["smile"] = None if ml is None and mr is None else round(max(ml or 0.0, mr or 0.0), 4)
+    rec["ear_l"] = _ear(lms, LEFT_EAR_IDX, cw, ch)
+    rec["ear_r"] = _ear(lms, RIGHT_EAR_IDX, cw, ch)
+    rec["yaw"] = _yaw(lms, cw, ch)
+    if _sunglasses(crop, lms, cw, ch):
+        rec["eye_state"] = "unsure"
+        rec["note"] = "occluded"
+        return True
+    state, note = _eye_state(rec, img_short)
+    rec["eye_state"] = state
+    if note:
+        rec["note"] = note
+    return True
+
+
 def _analyze(pil_rgb):
     import cv2
     import numpy as np
@@ -289,7 +358,8 @@ def _analyze(pil_rgb):
         return []
 
     expand = float(CONFIG.get("eye_expand", 0.4))
-    crop_min = int(CONFIG.get("eye_crop_min", 128))
+    expand2 = float(CONFIG.get("eye_expand_retry", 0.8))
+    tiny_h = int(CONFIG.get("eye_tiny_h", 40))
     boxes = []
     for row in raw:
         x, y, bw, bh = [float(v) for v in row[:4]]
@@ -297,23 +367,10 @@ def _analyze(pil_rgb):
         oy = y / scale
         obw = bw / scale
         obh = bh / scale
-        cx = ox + obw / 2.0
-        cy = oy + obh / 2.0
-        nw = obw * (1.0 + expand)
-        nh = obh * (1.0 + expand)
-        x0 = int(round(cx - nw / 2.0))
-        y0 = int(round(cy - nh / 2.0))
-        x1 = int(round(cx + nw / 2.0))
-        y1 = int(round(cy + nh / 2.0))
-        x0 = max(0, x0)
-        y0 = max(0, y0)
-        x1 = min(ow, x1)
-        y1 = min(oh, y1)
         boxes.append({
             "box": [int(round(ox)), int(round(oy)), int(round(obw)), int(round(obh))],
             "orig": (ox, oy, obw, obh),
             "h_px": int(round(obh)),
-            "crop": (x0, y0, x1, y1),
             "area": max(obw, 0) * max(obh, 0),
         })
 
@@ -330,49 +387,19 @@ def _analyze(pil_rgb):
             "ear_l": None,
             "ear_r": None,
             "yaw": None,
+            "rel_blink": None,
             "eye_state": "unsure",
             "subject": False,
         }
-        x0, y0, x1, y1 = b["crop"]
-        cw, ch = x1 - x0, y1 - y0
-        if min(cw, ch) < crop_min:
+        if b["h_px"] < tiny_h:
+            rec["note"] = "tiny"
             out.append(rec)
             continue
-        crop = img.crop((x0, y0, x1, y1))
-        rgb = np.array(crop)
-        if rgb.dtype != np.uint8:
-            rgb = rgb.astype("uint8")
-        if not rgb.flags["C_CONTIGUOUS"]:
-            rgb = np.ascontiguousarray(rgb)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = landmarker.detect(mp_image)
-        idx = _pick_face(result, b["crop"], b["orig"], cw, ch)
-        if idx is None:
+        ok = _run_landmarker(landmarker, mp, np, img, rec, b["orig"], expand, ow, oh, img_short)
+        if not ok:
+            ok = _run_landmarker(landmarker, mp, np, img, rec, b["orig"], expand2, ow, oh, img_short)
+        if not ok:
             rec["note"] = "no_match"
-            out.append(rec)
-            continue
-        lms = result.face_landmarks[idx]
-        cats = result.face_blendshapes[idx] if result.face_blendshapes else []
-        rec["blink_l"] = _bs(cats, "eyeBlinkLeft")
-        rec["blink_r"] = _bs(cats, "eyeBlinkRight")
-        sl = _bs(cats, "eyeSquintLeft")
-        sr = _bs(cats, "eyeSquintRight")
-        rec["squint"] = None if sl is None and sr is None else round(max(sl or 0.0, sr or 0.0), 4)
-        ml = _bs(cats, "mouthSmileLeft")
-        mr = _bs(cats, "mouthSmileRight")
-        rec["smile"] = None if ml is None and mr is None else round(max(ml or 0.0, mr or 0.0), 4)
-        rec["ear_l"] = _ear(lms, LEFT_EAR_IDX, cw, ch)
-        rec["ear_r"] = _ear(lms, RIGHT_EAR_IDX, cw, ch)
-        rec["yaw"] = _yaw(lms, cw, ch)
-        if _sunglasses(crop, lms, cw, ch):
-            rec["eye_state"] = "unsure"
-            rec["note"] = "occluded"
-            out.append(rec)
-            continue
-        state, note = _eye_state(rec, img_short)
-        rec["eye_state"] = state
-        if note:
-            rec["note"] = note
         out.append(rec)
 
     if not out:

@@ -115,6 +115,74 @@ def sharp_tile_max_of(rgb_img):
     return round(float(max(vals)), 1) if vals else None
 
 
+def _face_geom(f):
+    box = f.get("box") or [0, 0, 0, 0]
+    x, y, w, h = box
+    h = h or f.get("h_px") or 0
+    return x + w / 2.0, y + h / 2.0, float(h)
+
+
+def _same_person(a, b):
+    ax, ay, ah = _face_geom(a)
+    bx, by, bh = _face_geom(b)
+    if ah <= 0 or bh <= 0:
+        return False
+    dist = ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+    if dist >= 0.5 * ((ah + bh) / 2.0):
+        return False
+    ratio = ah / bh
+    return 0.7 <= ratio <= 1.4
+
+
+def attach_rel_blink(member_recs):
+    """同一 dup 簇内对齐同一个人，写 rel_blink / eye_rel_closed_n。"""
+    thresh = float(CONFIG.get("eye_rel_closed", 0.25))
+    keys = []
+    for ri, rec in enumerate(member_recs):
+        for fi, f in enumerate(rec.get("faces") or []):
+            keys.append((ri, fi))
+            f["rel_blink"] = None
+    for rec in member_recs:
+        rec["eye_rel_closed_n"] = 0
+    if len(keys) < 2:
+        return
+    dsu = DSU(len(keys))
+    for a in range(len(keys)):
+        ri, fi = keys[a]
+        fa = member_recs[ri]["faces"][fi]
+        for b in range(a + 1, len(keys)):
+            rj, fj = keys[b]
+            if ri == rj:
+                continue
+            fb = member_recs[rj]["faces"][fj]
+            if _same_person(fa, fb):
+                dsu.union(a, b)
+    for group in dsu.groups():
+        photos = set(keys[i][0] for i in group)
+        if len(photos) < 2:
+            continue
+        scored = []
+        for i in group:
+            ri, fi = keys[i]
+            f = member_recs[ri]["faces"][fi]
+            bl, br = f.get("blink_l"), f.get("blink_r")
+            if bl is None and br is None:
+                continue
+            scored.append((i, max(bl or 0.0, br or 0.0)))
+        if not scored:
+            continue
+        base = min(s for _, s in scored)
+        for i, mx in scored:
+            ri, fi = keys[i]
+            f = member_recs[ri]["faces"][fi]
+            f["rel_blink"] = round(mx - base, 4)
+    for rec in member_recs:
+        rec["eye_rel_closed_n"] = sum(
+            1 for f in (rec.get("faces") or [])
+            if f.get("subject") and (f.get("rel_blink") or 0) >= thresh
+        )
+
+
 def cluster_dups(recs):
     """同 (device, subtype) 内聚簇。返回 {(primary): (dup_group, dup_size, suggested_keep)}。"""
     by_part = {}
@@ -137,17 +205,23 @@ def cluster_dups(recs):
             members.sort(key=lambda i: rows[i]["time"])
             dcount += 1
             label = "D%03d" % dcount
+            group_recs = [rows[i] for i in members]
+            if len(group_recs) >= 2:
+                attach_rel_blink(group_recs)
             clean = [rows[i] for i in members if not ({"R1", "R3-high", "R3-low"} & set(rows[i]["flags"]))]
             pool = clean or [rows[i] for i in members]
 
             def _keep_rank(r):
+                rel = r.get("eye_rel_closed_n")
                 closed = r.get("eyes_closed_n")
                 half = r.get("eyes_half_n")
+                if rel is None:
+                    rel = 0
                 if closed is None:
                     closed = 0
                 if half is None:
                     half = 0
-                return (-closed, -half, r.get("sharp_p90") or 0)
+                return (-rel, -closed, -half, r.get("sharp_p90") or 0)
 
             keep = max(pool, key=_keep_rank)
             for i in members:
@@ -232,6 +306,7 @@ def main():
             "subject_faces_n": None,
             "eyes_closed_n": None,
             "eyes_half_n": None,
+            "eye_rel_closed_n": 0,
             "faces": None,
             "faces_err": None,
         }
@@ -288,6 +363,8 @@ def main():
         g = dups.get(r["primary"])
         if g:
             r["dup_group"], r["dup_size"], r["suggested_keep"] = g
+        if r.get("eye_rel_closed_n"):
+            r["flags"].append("EYE-rel")
     attach_dup_diag(recs, lambda a, b: hamming(phash_int(a["phash"]), phash_int(b["phash"])))
     xsim = cross_similar(ok)
     for r in ok:
@@ -354,11 +431,12 @@ def main():
     out = save_report(root, "analysis.json", meta, recs)
     dt = time.time() - t0
     _fn, _fs, face_ms = face_timing()
-    print("照片 %d：读取失败 %d（兜底 %d），R1 %d，R2 %d，R3-high %d，R3-low %d，EYE %d，EYE-half %d，dup 簇 %d，cross %d 对，拼图 %d 张，用时 %.1fs，人脸 %.0fms/张"
+    print("照片 %d：读取失败 %d（兜底 %d），R1 %d，R2 %d，R3-high %d，R3-low %d，EYE %d，EYE-half %d，EYE-rel %d，dup 簇 %d，cross %d 对，拼图 %d 张，用时 %.1fs，人脸 %.0fms/张"
           % (len(recs), len(errors), fallback_n,
              flag_counts.get("R1", 0), flag_counts.get("R2", 0),
              flag_counts.get("R3-high", 0), flag_counts.get("R3-low", 0),
              flag_counts.get("EYE", 0), flag_counts.get("EYE-half", 0),
+             flag_counts.get("EYE-rel", 0),
              len(dup_groups), x_pairs, len(sheets), dt, face_ms))
     print("人脸检测失败 %d 张" % face_fail)
     print("→ " + str(out))

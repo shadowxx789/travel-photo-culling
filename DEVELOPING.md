@@ -14,4 +14,5 @@
 - 闭眼检测两段式：YuNet（长边 1600）找框，映射回 `load_primary` 已转正的工作图，扩边 40% 再裁切送 FaceLandmarker。必须先 `exif_transpose`，否则 Orientation 错的 Luna 会把脸裁歪。
 - landmarker `num_faces=3`，选关键点中心落在 YuNet 原框内且离裁切中心最近的一张；都不符合则 `unsure` / `note=no_match`。`analyze_faces` 出错返回 `(None, 错误类型)`，不把失败当成 0 张脸。
 - `smile_squint`：closed 且 smile/squint 都高 → half；half 且都高 → open，不打 EYE-half。
-- 按 blink 分数排序标定：真闭眼不足 5 张则不推荐阈值，CONFIG 保持 `eye_t_closed=0.50` / `eye_t_half=0.35` 不动。缺模型时 faces 全 null，分析不退出。
+- 裁切短边 < 256 时 LANCZOS 放大到 256 再送 landmarker；YuNet 框高 < 40px 记 `tiny`。landmarker 无匹配时扩边 80% 重试一次。
+- 簇内 `rel_blink`：框中心距离 < 0.5×平均框高且高度比 0.7–1.4 视为同一人；`eye_rel_closed=0.25`。`suggested_keep` 先比 `eye_rel_closed_n`。

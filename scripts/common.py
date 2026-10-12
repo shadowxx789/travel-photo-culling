@@ -52,6 +52,10 @@ CONFIG = {
     "eye_subject_h_frac": 0.08,
     "eye_subject_area_frac": 0.25,
     "eye_smile_squint": 0.4,
+    "eye_upscale_min": 256,
+    "eye_tiny_h": 40,
+    "eye_expand_retry": 0.8,
+    "eye_rel_closed": 0.25,
 }
 
 
