@@ -15,4 +15,4 @@
 - landmarker `num_faces=3`，选关键点中心落在 YuNet 原框内且离裁切中心最近的一张；都不符合则 `unsure` / `note=no_match`。`analyze_faces` 出错返回 `(None, 错误类型)`，不把失败当成 0 张脸。
 - `smile_squint`：closed 且 smile/squint 都高 → half；half 且都高 → open，不打 EYE-half。
 - 裁切短边 < 256 时 LANCZOS 放大到 256 再送 landmarker；YuNet 框高 < 40px 记 `tiny`。landmarker 无匹配时扩边 80% 重试一次。
-- 簇内 `rel_blink`：框中心距离 < 0.5×平均框高且高度比 0.7–1.4 视为同一人；`eye_rel_closed=0.25`。`suggested_keep` 先比 `eye_rel_closed_n`。
+- 簇内 `rel_blink` / `eye_rel_closed_n` 仍写入 JSON，`EYE-rel` 只上拼图。`suggested_keep`：`subject_open_n` 多 → `eyes_closed_n` 少 → `sharp_p90` 高。没检测到脸或 unsure 不能靠「没有闭眼」胜出。

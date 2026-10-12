@@ -212,16 +212,13 @@ def cluster_dups(recs):
             pool = clean or [rows[i] for i in members]
 
             def _keep_rank(r):
-                rel = r.get("eye_rel_closed_n")
+                opened = r.get("subject_open_n")
                 closed = r.get("eyes_closed_n")
-                half = r.get("eyes_half_n")
-                if rel is None:
-                    rel = 0
+                if opened is None:
+                    opened = 0
                 if closed is None:
                     closed = 0
-                if half is None:
-                    half = 0
-                return (-rel, -closed, -half, r.get("sharp_p90") or 0)
+                return (opened, -closed, r.get("sharp_p90") or 0)
 
             keep = max(pool, key=_keep_rank)
             for i in members:
@@ -306,6 +303,7 @@ def main():
             "subject_faces_n": None,
             "eyes_closed_n": None,
             "eyes_half_n": None,
+            "subject_open_n": 0,
             "eye_rel_closed_n": 0,
             "faces": None,
             "faces_err": None,

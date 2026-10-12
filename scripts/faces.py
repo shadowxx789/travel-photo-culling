@@ -61,6 +61,7 @@ def _null_fields():
         "subject_faces_n": None,
         "eyes_closed_n": None,
         "eyes_half_n": None,
+        "subject_open_n": None,
         "faces": None,
         "faces_err": None,
     }
@@ -72,6 +73,7 @@ def empty_fields():
         "subject_faces_n": 0,
         "eyes_closed_n": 0,
         "eyes_half_n": 0,
+        "subject_open_n": 0,
         "faces": [],
         "faces_err": None,
     }
@@ -423,6 +425,7 @@ def fields_from_faces(faces, err=None):
         "subject_faces_n": len(sub),
         "eyes_closed_n": sum(1 for f in sub if f.get("eye_state") == "closed"),
         "eyes_half_n": sum(1 for f in sub if f.get("eye_state") == "half"),
+        "subject_open_n": sum(1 for f in sub if f.get("eye_state") == "open"),
         "faces": faces,
         "faces_err": err,
     }
