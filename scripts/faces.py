@@ -57,6 +57,7 @@ def _null_fields():
         "eyes_closed_n": None,
         "eyes_half_n": None,
         "faces": None,
+        "faces_err": None,
     }
 
 
@@ -67,6 +68,7 @@ def empty_fields():
         "eyes_closed_n": 0,
         "eyes_half_n": 0,
         "faces": [],
+        "faces_err": None,
     }
 
 
@@ -163,7 +165,7 @@ def _get_landmarker():
     opts = vision.FaceLandmarkerOptions(
         base_options=mp_python.BaseOptions(model_asset_path=str(path)),
         output_face_blendshapes=True,
-        num_faces=1,
+        num_faces=3,
         running_mode=vision.RunningMode.IMAGE,
     )
     _landmarker = vision.FaceLandmarker.create_from_options(opts)
@@ -199,23 +201,65 @@ def _eye_state(face, img_short):
     if state == "closed" and smile >= smile_t and squint >= smile_t:
         state = "half"
         note = "smile_squint"
+    elif state == "half" and smile >= smile_t and squint >= smile_t:
+        state = "open"
+        note = "smile_squint"
     return state, note
 
 
 def analyze_faces(pil_rgb):
-    """对已转正的 RGB PIL 图检测人脸。缺模型返回 None（调用方写 null）。"""
+    """对已转正的 RGB PIL 图检测人脸。返回 (faces, err)。
+    缺模型：(None, None)；出错：(None, 错误类型)；正常：(list, None)。"""
     global _face_n, _face_s
     if not models_ok():
         warn_missing_models()
-        return None
+        return None, None
     t0 = time.time()
+    err = None
+    faces = None
     try:
         faces = _analyze(pil_rgb)
-    except Exception:
-        faces = []
+    except Exception as e:
+        faces = None
+        err = type(e).__name__
     _face_n += 1
     _face_s += time.time() - t0
-    return faces
+    return faces, err
+
+
+def _pick_face(result, crop, orig, cw, ch):
+    """在最多 3 张 landmarker 脸里，选关键点中心落在 YuNet 原框内、且离裁切中心最近的一张。"""
+    if not result or not result.face_landmarks:
+        return None
+    x0, y0, x1, y1 = crop
+    ox, oy, obw, obh = orig
+    ccx = (x0 + x1) / 2.0
+    ccy = (y0 + y1) / 2.0
+    best = None
+    best_d = None
+    n_lms = len(result.face_landmarks)
+    for i in range(n_lms):
+        lms = result.face_landmarks[i]
+        if not lms:
+            continue
+        sx = 0.0
+        sy = 0.0
+        n = 0
+        for p in lms:
+            sx += float(p.x) * cw
+            sy += float(p.y) * ch
+            n += 1
+        if n == 0:
+            continue
+        mx = x0 + sx / n
+        my = y0 + sy / n
+        if mx < ox or mx > ox + obw or my < oy or my > oy + obh:
+            continue
+        d = (mx - ccx) ** 2 + (my - ccy) ** 2
+        if best_d is None or d < best_d:
+            best_d = d
+            best = i
+    return best
 
 
 def _analyze(pil_rgb):
@@ -267,6 +311,7 @@ def _analyze(pil_rgb):
         y1 = min(oh, y1)
         boxes.append({
             "box": [int(round(ox)), int(round(oy)), int(round(obw)), int(round(obh))],
+            "orig": (ox, oy, obw, obh),
             "h_px": int(round(obh)),
             "crop": (x0, y0, x1, y1),
             "area": max(obw, 0) * max(obh, 0),
@@ -301,11 +346,13 @@ def _analyze(pil_rgb):
             rgb = np.ascontiguousarray(rgb)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = landmarker.detect(mp_image)
-        if not result.face_landmarks:
+        idx = _pick_face(result, b["crop"], b["orig"], cw, ch)
+        if idx is None:
+            rec["note"] = "no_match"
             out.append(rec)
             continue
-        lms = result.face_landmarks[0]
-        cats = result.face_blendshapes[0] if result.face_blendshapes else []
+        lms = result.face_landmarks[idx]
+        cats = result.face_blendshapes[idx] if result.face_blendshapes else []
         rec["blink_l"] = _bs(cats, "eyeBlinkLeft")
         rec["blink_r"] = _bs(cats, "eyeBlinkRight")
         sl = _bs(cats, "eyeSquintLeft")
@@ -338,15 +385,17 @@ def _analyze(pil_rgb):
     return out
 
 
-def fields_from_faces(faces):
+def fields_from_faces(faces, err=None):
     if faces is None:
-        return _null_fields()
+        d = _null_fields()
+        d["faces_err"] = err
+        return d
     sub = [f for f in faces if f.get("subject")]
-    d = {
+    return {
         "faces_n": len(faces),
         "subject_faces_n": len(sub),
         "eyes_closed_n": sum(1 for f in sub if f.get("eye_state") == "closed"),
         "eyes_half_n": sum(1 for f in sub if f.get("eye_state") == "half"),
         "faces": faces,
+        "faces_err": err,
     }
-    return d

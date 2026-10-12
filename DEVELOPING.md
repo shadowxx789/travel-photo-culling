@@ -11,6 +11,6 @@
 - 非 Luna 的 zoom_bucket 用 40/105 硬分档，不要改 CONFIG 的 `zoom_tele_max`。Luna 镜头未匹配时仍走原来的 wide/tele/digital。
 - 合成 RAW 测试文件：先对 JPG 写 exif 再 copy 成 RAW 扩展名。exiftool 对「JPEG 内容 + RAW 扩展名」直接 `-overwrite_original` 会失败。
 - `attach_dup_diag` 在 `common.py`，距离函数作为参数传入。照片用单张 pHash 汉明距离；视频用 3 帧 pHash 距离的平均值，与聚簇口径一致。
-- 闭眼检测两段式：YuNet（长边 1600）找框，映射回 `load_primary` 已转正的工作图，扩边 40% 再裁切送 FaceLandmarker。必须先 `exif_transpose`，否则 Orientation 错的 Luna 会把脸裁歪。
-- `smile_squint`：smile 与 squint 都高时把 closed 降为 half，避免大笑眯眼进 EYE。
+- landmarker `num_faces=3`，选关键点中心落在 YuNet 原框内且离裁切中心最近的一张；都不符合则 `unsure` / `note=no_match`。`analyze_faces` 出错返回 `(None, 错误类型)`，不把失败当成 0 张脸。
+- `smile_squint`：closed 且 smile/squint 都高 → half；half 且都高 → open，不打 EYE-half。
 - 标定（南京芜湖拍平副本 + 盐城 /tmp 拍平副本，T_closed 0.3–0.7 扫描）：closed 查准率优先，最终 `eye_t_closed=0.50`、`eye_t_half=0.35`。低于 0.45 会把睁眼看地图打成 closed；高于 0.55 会丢掉唯一一张真闭眼。缺模型时 faces 全 null，分析不退出。

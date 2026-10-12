@@ -233,6 +233,7 @@ def main():
             "eyes_closed_n": None,
             "eyes_half_n": None,
             "faces": None,
+            "faces_err": None,
         }
         try:
             if it["kind"] == "raw":
@@ -249,7 +250,8 @@ def main():
             rec["sharp_tile_max"] = sharp_tile_max_of(img)
             rec["phash"] = str(imagehash.phash(img))
             rec["flags"] = flag_of(rec, it.get("screenshot"), skip_r1r3=rec["hdr"])
-            rec.update(fields_from_faces(analyze_faces(img)))
+            faces, ferr = analyze_faces(img)
+            rec.update(fields_from_faces(faces, ferr))
             rec["_img"] = img
         except Exception as e:
             rec["error"] = "%s: %s" % (type(e).__name__, e)
@@ -335,6 +337,7 @@ def main():
     x_pairs = sum(len(v) for v in (r["similar_cross"] for r in recs)) // 2
     errors = [r for r in recs if r["error"]]
 
+    face_fail = sum(1 for r in recs if r.get("faces_err"))
     meta = {
         "photo_total": len(recs),
         "flag_counts": flag_counts,
@@ -346,6 +349,7 @@ def main():
         "dup_groups": dup_groups,
         "similar_cross_pairs": x_pairs,
         "sheets": sheets,
+        "face_errors": face_fail,
     }
     out = save_report(root, "analysis.json", meta, recs)
     dt = time.time() - t0
@@ -356,6 +360,7 @@ def main():
              flag_counts.get("R3-high", 0), flag_counts.get("R3-low", 0),
              flag_counts.get("EYE", 0), flag_counts.get("EYE-half", 0),
              len(dup_groups), x_pairs, len(sheets), dt, face_ms))
+    print("人脸检测失败 %d 张" % face_fail)
     print("→ " + str(out))
 
 
